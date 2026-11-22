@@ -27,7 +27,7 @@
 
 \begin{document}
 
-\title{Modelos Predictivos de Machine Learning para la Clasificación de Diabetes en el Dataset Pima Indians}
+\title{Pronóstico del PBI del Sector Electricidad y Agua del Perú con un SARIMAX con Selección Automática de Variables Exógenas}
 
 \author{
 \IEEEauthorblockN{1\textsuperscript{st} Ronal Mora-Aybar}
@@ -51,125 +51,106 @@ Lima, Perú \\
 \maketitle
 
 \begin{abstract}
-La diabetes crece de forma sostenida en el Perú y presiona a un sistema de salud con capacidad limitada para confirmar y dar seguimiento a los casos. Frente a ese problema, este informe construye y evalúa un pipeline completo de minería de datos para clasificar diabetes a partir del conjunto Pima Indians Diabetes. El flujo sigue una secuencia ordenada: primero se explora y depura la información ---tratamiento de valores faltantes, control de outliers, transformación y escalado robusto---; luego se comparan cinco modelos base y cinco de ensamble, además de un modelo de stacking, bajo un mismo protocolo de validación; y, por último, se interpretan las predicciones con SHAP. Para evitar la fuga de información, se retiraron 6 coincidencias exactas entre las particiones, con lo que el entrenamiento quedó en 2\,460 registros y la prueba en 302. El mejor modelo fue Bagging de árboles (ROC AUC = 0.8937, F1 = 0.7222, accuracy = 0.8344 en test), que superó por un margen mínimo al Stacking Top-3 (ROC AUC = 0.8889). El análisis con SHAP muestra que \code{Glucose} es, con diferencia, la variable más influyente ---seguida de \code{BMI}, \code{Age} y \code{DiabetesPedigreeFunction}--- y que su efecto es clínicamente coherente: a mayor valor, mayor probabilidad predicha de diabetes. A partir de ese resultado, se propone emplear el score del modelo como mecanismo de priorización ---ordenar a los pacientes por riesgo para acelerar su confirmación diagnóstica y seguimiento--- y no como sustituto de la decisión clínica.
+Este estudio pronostica el índice mensual del PBI del sector Electricidad y Agua del Perú (BCRP, 2007 = 100) con un modelo SARIMAX cuyas variables exógenas se eligen de forma automática. Se partió de ocho candidatas con sustento causal: cuatro índices sectoriales, el precio del cobre, el Índice Costero El Niño (ICEN), los días hábiles del mes y la Semana Santa. El rezago de cada una se fijó por BIC. Luego se aplicó un filtro de colinealidad sobre las series diferenciadas y una eliminación hacia atrás al 5\%. Quedaron los días hábiles y el ICEN con 10 meses de rezago. Sobre la serie $100\ln I_t$, entre enero de 2002 y diciembre de 2021, el modelo SARIMAX$(0,1,1)(0,1,1)_{12}$ reduce el BIC del SARIMA en 20.9 puntos y sus residuos no están autocorrelacionados. Un día hábil adicional eleva el índice en 0.29\%, y cada grado de anomalía del ICEN lo reduce en 0.44\% diez meses después. En la prueba (enero de 2022 a julio de 2026, 55 meses), con pronóstico a un mes, el SARIMAX obtuvo el menor error entre los 20 modelos del objetivo: RMSE de 2.70 puntos, MAPE de 1.06\%, MASE de 0.35 y U de Theil de 0.32. La comparación incluyó AR, MA, ARMA, ARIMA, SARIMA, Prophet, XGBoost, LightGBM, CatBoost, H2O AutoML, LSTM, GRU y sus versiones bidireccionales, un Transformer entrenado desde cero y los Transformers preentrenados TimesFM-3, PatchTST-FM-r2 y Toto 2.0. La prueba de Diebold-Mariano no encontró ningún modelo significativamente mejor que el SARIMAX. Este resultó significativamente mejor que 11 de los 19 modelos restantes. Con PatchTST-FM-r2, el SARIMA, AutoML, CatBoost, XGBoost, la GRU bidireccional y Prophet, la diferencia no fue significativa. El SARIMAX reestimado con toda la muestra pronostica que el crecimiento interanual del sector bajará de 7.4\% en agosto de 2026 a 1.6\% en julio de 2027. Desde diciembre de 2026, ese crecimiento queda por debajo del pronóstico del SARIMA, hasta 1.8 puntos porcentuales en julio de 2027, cuando el ICEN rezagado supera 3 \textdegree C.
 \end{abstract}
 
 \begin{IEEEkeywords}
-diabetes, minería de datos, machine learning, clasificación, Bagging, XGBoost, SHAP, Pima Indians, ROC AUC.
+series de tiempo, SARIMAX, selección de variables exógenas, PBI Electricidad y Agua, El Niño Costero, Prophet, boosting, redes recurrentes, Transformers preentrenados, Diebold-Mariano.
 \end{IEEEkeywords}
 
 \section{Introducción}
 
-La diabetes mellitus es una enfermedad crónica de alta relevancia sanitaria por su asociación con complicaciones cardiovasculares, renales, neurológicas y visuales, y constituye una de las principales enfermedades no transmisibles a nivel global \cite{idf2021,who2021}. En el Perú, la diabetes muestra una trayectoria ascendente: la prevalencia autorreportada en personas de 15 años a más pasó de 3.9\% en 2019 a 4.5\% en 2020, 4.9\% en 2021 y 5.5\% en 2023. Este cambio equivale a un aumento de 1.6 puntos porcentuales y a un crecimiento relativo aproximado de 41\% frente a 2019. El último dato nacional explícito revisado corresponde a ENDES 2023, resumido por MINSA como cerca de 1.3 millones de peruanos mayores de 15 años viviendo con diabetes \cite{minsa2024,inei2023}.
+El sector Electricidad y Agua produce la energía eléctrica y el agua potable que usa el resto de la economía, y su producción se mide con los volúmenes físicos de electricidad, gas y agua \cite{inei2017}. El índice mensual de su PBI, que publica el Banco Central de Reserva del Perú (BCRP), pasó de 73.85 puntos en enero de 2002 a 222.60 en julio de 2026, es decir, se multiplicó por 3.0, con un crecimiento promedio de 4.6\% anual entre 2002 y 2025 \cite{bcrpdata}. La demanda de electricidad está ligada a la minería, que es intensiva en energía y es el mayor consumidor de electricidad del país \cite{norgate2010,bcrp_moneda198}, y a la manufactura y la construcción \cite{peralta2021}. La generación hidroeléctrica depende de la hidrología, que El Niño Costero altera \cite{lavado2013,takahashi2015}, y el número de días de producción cambia de un mes a otro \cite{bell1983,hong2016}.
 
-La carga no es únicamente epidemiológica. El CDC Perú reportó 54\,986 casos registrados entre enero de 2023 y junio de 2024 y advirtió subregistro; para 2025 la red de notificación incluía 1\,600 establecimientos, de los cuales 1\,440 correspondían al primer nivel de atención \cite{cdc2024,cdc2025}. Esto evidencia un sistema en expansión, pero todavía con brechas de registro, confirmación diagnóstica y seguimiento.
+El pronóstico de la demanda eléctrica se usa en la planificación de la operación y de la expansión de los sistemas eléctricos \cite{hong2016}. La serie del sector tiene tendencia, estacionalidad anual y el quiebre de la pandemia de 2020--2021. Las regresiones entre series con tendencia pueden mostrar relaciones espurias \cite{granger1974}; por ello, en este estudio las variables exógenas se eligen con un procedimiento automático aplicado a las series diferenciadas.
 
-En este contexto, los modelos de machine learning pueden apoyar la priorización de pacientes con mayor probabilidad de diabetes, especialmente cuando se usan como herramientas de apoyo a la decisión clínica y no como sustitutos del diagnóstico médico. El reto técnico consiste en construir un flujo reproducible que evite fuga de información, trate correctamente los valores faltantes y permita comparar modelos con métricas adecuadas. El reto aplicado consiste en convertir el resultado del modelo en una acción útil: priorizar al paciente con mayor riesgo para confirmación rápida mediante glucemia en ayunas, HbA1c o prueba de tolerancia oral a la glucosa. Estudios previos sobre diabetes han mostrado el valor de modelos de clasificación y minería de datos para este tipo de problema \cite{kavakiotis2017,sisodia2018}.
-
-El objetivo del proyecto es desarrollar y evaluar un pipeline de minería de datos para predecir la variable binaria \code{Outcome}, donde 0 representa ausencia de diabetes y 1 presencia de diabetes, usando variables clínicas y antropométricas del dataset Pima Indians. El código completo y los recursos del proyecto están disponibles públicamente en el repositorio del proyecto\footnote{\url{https://github.com/23-Andres-QC/ProyectoFinalMineria}}.
+El objetivo del proyecto es construir un SARIMAX para el índice del PBI de Electricidad y Agua, con las variables exógenas elegidas por un procedimiento automático y reproducible, y compararlo bajo un mismo protocolo con modelos econométricos, Prophet, boosting, AutoML, redes recurrentes, un Transformer entrenado desde cero y tres familias de Transformers preentrenados. Las preguntas de investigación son tres: ¿qué variables exógenas reducen el error del SARIMA?, ¿qué modelo obtiene el menor error de pronóstico en la prueba?, y ¿qué crecimiento pronostica el modelo para los 12 meses siguientes a la muestra? El código completo y los recursos del proyecto están disponibles públicamente en el repositorio del proyecto\footnote{\url{https://github.com/23-Andres-QC/ProyectoFinalMineria}}.
 
 \section{Contexto Peruano}
 
-La carga de diabetes en el Perú no se distribuye de manera uniforme y ejerce una presión creciente sobre el sistema de salud. La prevalencia es mayor en la Costa (6.0\% en 2022) que en la Selva (4.5\%) y la Sierra (3.0\%), y se concentra sobre todo en los adultos mayores, entre quienes alcanzó 14.0\% en 2023 y 2024. A esta mayor demanda se suma una red de vigilancia epidemiológica todavía en expansión, lo que tensiona consultas, laboratorios y programas de control de enfermedades crónicas \cite{pp0018,inei_adulto_mayor}. La Tabla~\ref{tab:contexto_peru} resume los principales indicadores nacionales revisados.
+La electricidad del Perú se genera en centrales hidroeléctricas y en centrales térmicas a gas natural. Con el gas de Camisea, la electricidad se volvió un factor de competitividad para los grandes consumidores del mercado de clientes libres \cite{peralta2021}. La minería es el mayor consumidor de electricidad del país \cite{bcrp_moneda198}. Las lluvias y los huaicos de El Niño Costero alteran los caudales de las cuencas que alimentan a las centrales hidroeléctricas \cite{lavado2013} y dañan las captaciones y plantas de agua \cite{takahashi2015,inei2017}. En marzo de 2017, en pleno El Niño Costero, la variación interanual del sector fue de $-0.6\%$ \cite{bcrpdata}, y el INEI registró ese mes el impacto de las lluvias e inundaciones en la producción nacional \cite{inei2017}. El ENFEN mide este fenómeno con el ICEN, la anomalía de la temperatura del mar en la región Niño 1+2 promediada en tres meses \cite{takahashi2015}. La Tabla~\ref{tab:contexto_peru} resume el comportamiento del sector en la muestra de análisis.
 
 \begin{table}[H]
 \centering
-\caption{Métricas de referencia sobre diabetes en Perú}
+\caption{Indicadores del sector Electricidad y Agua, enero 2002 -- julio 2026}
 \label{tab:contexto_peru}
 \scriptsize
 \begin{tabularx}{\columnwidth}{@{}lX@{}}
 \toprule
-\textbf{Indicador} & \textbf{Hallazgo resumido} \\
+\textbf{Indicador} & \textbf{Valor} \\
 \midrule
-Prevalencia 15+ & 3.9\% (2019), 4.5\% (2020), 4.9\% (2021), 5.5\% (2023). \\
-Personas afectadas & Aproximadamente 1.3 millones de peruanos mayores de 15 años en 2023. \\
-Mortalidad & Diabetes reportada por MINSA como séptima causa de muerte en 2024. \\
-Vigilancia & 54\,986 casos registrados entre enero de 2023 y junio de 2024; CDC advierte subregistro. \\
-Red notificante & 1\,600 IPRESS en 2025: 1\,440 de primer nivel y 160 hospitales. \\
-Adultos mayores & 14.0\% de prevalencia en población de 60 años a más en 2024. \\
-Brecha operativa & No existe un promedio nacional público uniforme desde primera consulta hasta diagnóstico confirmado. \\
+Índice (2007 = 100) & 73.85 en enero de 2002 y 222.60 en julio de 2026; mediana de 143.45. \\
+Crecimiento & 4.6\% anual promedio entre 2002 y 2025; variación interanual mediana de 4.99\%. \\
+Estacionalidad & Mediana del crecimiento mensual: $-7.5\%$ en febrero y $+9.1\%$ en marzo. \\
+Pandemia & Variación interanual de $-25.5\%$ en abril de 2020 y de $+34.0\%$ en abril de 2021. \\
+Meses atípicos & 12 meses fuera de la regla de Tukey en la variación interanual: 11 de la pandemia y febrero de 2016 ($+14.2\%$, mes de año bisiesto). \\
+Último dato & Julio de 2026: índice en el decil 10 de la muestra y variación interanual de 7.30\%. \\
+ICEN & 3.38 \textdegree C en el último dato (provisional), el máximo desde 2002. \\
 \bottomrule
 \end{tabularx}
 \end{table}
-
-\subsection{Métricas Operativas de Referencia}
-
-En la práctica peruana, el diagnóstico se apoya en tres pruebas centrales, cuyos umbrales e implicancias operativas se resumen en la Tabla~\ref{tab:pruebas_operativas}: la glucemia en ayunas es ampliamente disponible pero exige que el paciente llegue en ayunas; la HbA1c no requiere ayuno y puede reducir visitas; y la PTOG de 75 g requiere una permanencia mínima de dos horas. Los tiempos de entrega no suelen ser el cuello de botella: en laboratorios privados, glucosa, HbA1c y PTOG se reportan en menos de 24 horas o en 1 día hábil, y en un hospital público grande los exámenes generales se entregan en 1 día hábil \cite{multilab_glucosa,multilab_hba1c,loayza2025}. El problema, por tanto, está menos en la velocidad del laboratorio y más en el circuito: el ayuno, las visitas repetidas y la continuidad del seguimiento.
-
-\begin{table}[H]
-\centering
-\caption{Pruebas diagnósticas y tiempos operativos de referencia}
-\label{tab:pruebas_operativas}
-\scriptsize
-\begin{tabularx}{\columnwidth}{@{}lXX@{}}
-\toprule
-\textbf{Prueba} & \textbf{Umbral de diabetes} & \textbf{Implicancia operativa} \\
-\midrule
-Glucemia en ayunas & $\geq 126$ mg/dL & Bajo costo y alta disponibilidad; puede requerir nueva visita si el paciente no llegó en ayunas. \\
-HbA1c & $\geq 6.5\%$ & No requiere ayuno; útil para acortar el circuito diagnóstico si está disponible. \\
-PTOG 75 g & $\geq 200$ mg/dL a las 2 h & Más lenta; requiere al menos 2 horas de permanencia. \\
-\bottomrule
-\end{tabularx}
-\end{table}
-
-Para consulta externa, no se encontró un indicador nacional reciente de pacientes por día específicamente en consulta de diabetes. Sin embargo, la programación hospitalaria del MINSA usa turnos de 4 horas y varios documentos de gestión emplean productividades de 4 a 5 consultas por hora. Con esa referencia, un consultorio puede atender aproximadamente 16--20 pacientes por turno, o 32--40 si opera en doble turno. Esta restricción de capacidad refuerza la necesidad de priorizar mejor a los pacientes con mayor riesgo.
-
-\subsection{Rol Propuesto del Modelo}
-
-El modelo desarrollado no pretende diagnosticar de forma autónoma, sino actuar como un \textbf{filtro de priorización}: ordenar a los pacientes por probabilidad estimada de diabetes para acelerar la confirmación de los casos de mayor riesgo. Conviene precisar un límite del enfoque desde ahora: el score se calcula a partir de las variables de entrada del modelo ---incluida \code{Glucose}---, de modo que no decide si solicitar una primera prueba, sino que ordena la confirmación diagnóstica y el seguimiento una vez disponible una medición inicial. Bajo esa premisa, el valor del modelo está en reducir esperas, visitas innecesarias y pérdidas de seguimiento; la forma concreta de insertarlo en el circuito de atención se detalla más adelante (Sección~\ref{sec:impacto}).
 
 \section{Revisión de Literatura}
 
-La literatura sobre predicción de diabetes con machine learning suele trabajar con datos tabulares clínicos, donde las variables antropométricas, bioquímicas y demográficas permiten estimar riesgo mediante clasificadores supervisados. Revisiones previas han mostrado que algoritmos como SVM, redes neuronales, Naive Bayes, árboles de decisión y métodos de ensamble han sido ampliamente usados en problemas de diabetes \cite{kavakiotis2017,sisodia2018}.
+Para el Perú, Yoo y Kwak no encontraron causalidad entre el consumo de electricidad y el PBI agregado \cite{yoo2010}. En el pronóstico de la demanda eléctrica, los predictores habituales son los efectos de calendario, el clima y la actividad económica \cite{hong2016}. Según el metaanálisis de Labandeira et al., la elasticidad precio de la demanda de energía es baja en el corto plazo \cite{labandeira2017}.
 
-En datos tabulares, los métodos de ensamble suelen ser competitivos porque combinan múltiples modelos débiles o moderados para reducir varianza o sesgo. Bagging promedia árboles entrenados sobre muestras bootstrap, mientras que boosting entrena modelos secuenciales que corrigen errores anteriores. Implementaciones como XGBoost y LightGBM han destacado por su eficiencia y regularización en problemas de clasificación \cite{chen2016,ke2017}.
+La metodología de Box-Jenkins identifica, estima y valida modelos ARIMA y SARIMA para series con tendencia y estacionalidad \cite{box2015,hyndman2021}. El SARIMA$(0,1,1)(0,1,1)_{12}$, llamado ``modelo de aerolínea'', fue propuesto por Box y Jenkins para la serie mensual de pasajeros aéreos \cite{box2015}. El SARIMAX añade regresores al SARIMA y estima su efecto. Los efectos de calendario, como los días hábiles y la Semana Santa, se modelan como regresores determinísticos \cite{bell1983}. Prophet es un modelo aditivo con tendencia por tramos y estacionalidad de Fourier, que sus autores diseñaron para pronosticar muchas series con poca intervención del analista \cite{taylor2018}.
 
-No obstante, el rendimiento predictivo no es suficiente en salud. Un modelo de apoyo clínico debe ser interpretable, trazable y compatible con decisiones operativas. Por ello, SHAP se usa como técnica de explicación para estimar la contribución de cada variable a las predicciones del modelo \cite{lundberg2017}. En este proyecto, SHAP permite verificar si los predictores más influyentes coinciden con la evidencia clínica y con los hallazgos estadísticos del análisis exploratorio.
+XGBoost, LightGBM y CatBoost son implementaciones de boosting de árboles de decisión \cite{chen2016,ke2017,prokhorenkova2018}, y H2O AutoML automatiza el entrenamiento, la comparación y el ensamble de modelos \cite{ledell2020}. En series de tiempo, estos modelos usan los rezagos del objetivo como predictores. En aprendizaje profundo, las redes LSTM y GRU procesan la serie como una secuencia \cite{hochreiter1997,cho2014}, y sus versiones bidireccionales la recorren en ambos sentidos \cite{schuster1997}. Los Transformers se basan en mecanismos de atención \cite{vaswani2017}. PatchTST divide la serie en parches y, en los experimentos de sus autores, redujo el error de pronóstico de largo plazo frente a Transformers anteriores \cite{nie2023}. Los modelos fundacionales de series de tiempo se preentrenan con grandes colecciones de series y pronostican sin reentrenar: TimesFM \cite{das2024,timesfm3}, PatchTST-FM \cite{patchtstfm} y Toto 2.0 \cite{toto2026}.
+
+Para comparar pronósticos, Hyndman y Koehler propusieron el MASE, una métrica escalada por el error de un modelo ingenuo \cite{hyndman2006}, y la prueba de Diebold-Mariano evalúa si la diferencia de error entre dos pronósticos es significativa \cite{diebold1995}. Este estudio aplica ambas a un SARIMAX con exógenas elegidas por un procedimiento automático y a modelos de todas las familias anteriores, bajo un mismo esquema de pronóstico.
 
 \section{Metodología}
 \label{sec:metodologia}
 
-El estudio sigue la metodología de Box-Jenkins \cite{box2015,hyndman2021} para modelar la serie: transformación, prueba de estacionariedad, identificación, estimación, validación de residuos y pronóstico. Sobre esa base se construye un SARIMAX con dos variables exógenas y se compara con Prophet, modelos de machine learning, AutoML, redes neuronales recurrentes, un Transformer entrenado desde cero y Transformers preentrenados. Todos se evalúan con el mismo protocolo de pronóstico. Las subsecciones describen, en orden, la recolección de los datos, su preparación y las técnicas de análisis.
+El estudio sigue la metodología de Box-Jenkins \cite{box2015,hyndman2021} para modelar la serie: transformación, prueba de estacionariedad, identificación, estimación, validación de residuos y pronóstico. Sobre esa base se construye un SARIMAX cuyas variables exógenas se eligen con un procedimiento automático, y se compara con Prophet, modelos de machine learning, AutoML, redes neuronales recurrentes, un Transformer entrenado desde cero y Transformers preentrenados. Todos se evalúan con el mismo protocolo de pronóstico. Las subsecciones describen, en orden, la recolección de los datos, su preparación y las técnicas de análisis.
 
 \subsection{Recolección de los Datos}
 
-Los datos se descargaron con código directamente de sus fuentes oficiales. Del Banco Central de Reserva del Perú (BCRP), mediante la API de BCRPData \cite{bcrpdata}, se obtuvieron el índice del PBI del sector Electricidad y Agua (2007 = 100), su variación porcentual interanual y el precio internacional del cobre. Del Instituto Geofísico del Perú (IGP) se obtuvo el archivo oficial del Índice Costero El Niño (ICEN) que publica el ENFEN \cite{igp_icen,takahashi2015}. Todas las series son mensuales. La Tabla~\ref{tab:series} resume el rol de cada una.
+Los datos se descargaron con código directamente de sus fuentes oficiales. Del Banco Central de Reserva del Perú (BCRP), mediante la API de BCRPData \cite{bcrpdata}, se obtuvieron el índice del PBI del sector Electricidad y Agua (2007 = 100), su variación porcentual interanual, los índices de producción de cuatro sectores (minería metálica, manufactura de recursos primarios, manufactura no primaria y construcción) y el precio internacional del cobre. Del Instituto Geofísico del Perú (IGP) se obtuvo el archivo oficial del Índice Costero El Niño (ICEN) que publica el ENFEN \cite{igp_icen,takahashi2015}. Además, se construyeron dos variables de calendario: los días hábiles de cada mes (lunes a viernes menos los feriados nacionales del Perú) y la fracción de los ocho días previos a Pascua que cae en el mes, que recoge el efecto de la Semana Santa \cite{bell1983}. Todas las series son mensuales. La Tabla~\ref{tab:series} resume el rol de cada una.
 
 \begin{table}[H]
 \centering
-\caption{Series utilizadas, fuente y transformación}
+\caption{Serie objetivo, serie de control y variables exógenas candidatas}
 \label{tab:series}
 \scriptsize
 \begin{tabularx}{\columnwidth}{@{}lXl@{}}
 \toprule
-\textbf{Rol} & \textbf{Serie (fuente, código)} & \textbf{Transformación} \\
+\textbf{Rol} & \textbf{Serie (fuente, código)} & \textbf{Transf.} \\
 \midrule
-Objetivo $I_t$ & Índice del PBI Electricidad y Agua, 2007 = 100 (BCRP, \code{PN01765AM}) & $z_t = 100\ln I_t$ \\
+Objetivo $I_t$ & Índice del PBI Electricidad y Agua, 2007 = 100 (BCRP, \code{PN01765AM}) & $100\ln$ \\
 Control & Variación \% interanual del sector (BCRP, \code{PN01723AM}) & Ninguna \\
-Exógena $x_{1t}$ & Precio del cobre LME, \textcent US\$/lb (BCRP, \code{PN01652XM}) & $100\ln x_{1t}$ \\
-Exógena $x_{2t}$ & ICEN, anomalía en \textdegree C (ENFEN/IGP) & Ninguna \\
+\midrule
+Actividad & Minería metálica (BCRP, \code{PN01760AM}) & $100\ln$ \\
+Actividad & Manufactura de recursos primarios (BCRP, \code{PN01763AM}) & $100\ln$ \\
+Actividad & Manufactura no primaria (BCRP, \code{PN01764AM}) & $100\ln$ \\
+Actividad & Construcción (BCRP, \code{PN01766AM}) & $100\ln$ \\
+Precio & Cobre LME, \textcent US\$/lb (BCRP, \code{PN01652XM}) & $100\ln$ \\
+Clima & ICEN, anomalía en \textdegree C (ENFEN/IGP) & Ninguna \\
+Calendario & Días hábiles del mes, sin feriados nacionales & Ninguna \\
+Calendario & Semana Santa: fracción de los 8 días previos a Pascua en el mes & Ninguna \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 Se trabaja con el índice en niveles y no con su variación porcentual porque el logaritmo solo está definido para valores positivos: el índice siempre lo es, mientras que la variación toma valores negativos. La variación interanual oficial (\code{PN01723AM}) se usa como control: la variación calculada a partir del índice coincide con ella (diferencia máxima de $5.2\times10^{-14}$) y es la cifra contra la que se evalúan los pronósticos. El periodo de descarga termina en julio de 2026 y queda fijo para que los resultados sean reproducibles. Aun así, el BCRP revisa sus cifras y los últimos meses del ICEN son provisionales (es una media móvil centrada de tres meses), por lo que una nueva descarga puede dar valores algo distintos.
 
-El índice está disponible desde enero de 1994, el cobre desde enero de 2000 y el ICEN desde enero de 1950. La muestra de análisis va de enero de 2002 a julio de 2026 (295 observaciones mensuales, sin faltantes). Empieza en 2002 para que puedan probarse rezagos de hasta 12 meses en las exógenas con datos de cobre disponibles.
+El índice del sector y los índices sectoriales están disponibles desde enero de 1994, el cobre desde enero de 2000 y el ICEN desde enero de 1950. La muestra de análisis va de enero de 2002 a julio de 2026 (295 observaciones mensuales, sin faltantes). Empieza en 2002 para que puedan probarse rezagos de hasta 12 meses en las exógenas con datos de cobre disponibles.
 
-Las variables exógenas se eligieron con tres criterios. Primero, debían ser \textbf{externas al sector}: el INEI calcula el PBI de Electricidad y Agua con los volúmenes físicos de producción de electricidad, gas y agua \cite{inei2017}, de modo que se descartaron otros sectores del PBI, la demanda interna y la producción eléctrica en GWh, que forman parte del cálculo. Segundo, debían tener un \textbf{canal causal documentado}. La gran minería es el mayor consumidor de electricidad del país \cite{bcrp_moneda198}, y un cobre caro impulsa su producción y sus ampliaciones. El Niño Costero, por su parte, trae lluvias y huaicos que dañan captaciones y plantas de agua y altera la hidrología de las centrales hidroeléctricas \cite{inei2017,takahashi2015}. Tercero, debían contar con \textbf{datos mensuales oficiales desde 2000}. También se evaluaron el tipo de cambio, el IPC, las expectativas empresariales y la temperatura de Lima, pero se descartaron porque su canal hacia el sector es más indirecto o porque se superponen con el ICEN. La Fig.~\ref{fig:serie_exogenas} muestra la serie y las dos exógenas.
+Las candidatas a variables exógenas se eligieron con tres criterios. Primero, \textbf{no debían formar parte del cálculo del sector}. El INEI calcula el PBI de Electricidad y Agua con los volúmenes físicos de producción de electricidad, gas y agua \cite{inei2017}. Por eso se descartaron la producción eléctrica en GWh y los agregados que contienen al propio sector, como el PBI total y el PBI no primario. Los índices de minería, manufactura y construcción no lo contienen, de modo que pueden ser candidatos. Segundo, debían tener un \textbf{canal causal documentado} hacia la demanda de electricidad o de agua. La minería es intensiva en energía \cite{norgate2010} y es el mayor consumidor de electricidad del país \cite{bcrp_moneda198}, y el precio del cobre anticipa su producción y sus ampliaciones. La electricidad es un insumo de la manufactura y de la construcción, cuya demanda se refleja en el mercado de clientes libres \cite{peralta2021}. El Niño Costero altera la hidrología de las centrales hidroeléctricas y trae lluvias y huaicos que dañan captaciones y plantas de agua \cite{takahashi2015,lavado2013,inei2017}. Los días hábiles y la Semana Santa cambian el número de días de producción de cada mes \cite{bell1983,hong2016}. Tercero, debían contar con \textbf{datos mensuales oficiales desde 2000}. El PBI total, además, se descartó porque no se ha encontrado causalidad entre el consumo de electricidad y el PBI agregado en el Perú \cite{yoo2010}, lo que favorece usar indicadores sectoriales. Las tarifas eléctricas se descartaron porque la demanda de energía es poco sensible al precio \cite{labandeira2017} y la serie de tarifas reales del BCRP empieza recién en 2010. La Fig.~\ref{fig:serie_exogenas} muestra la serie y las ocho candidatas.
 
 \begin{figure}[H]
   \centering
   \includegraphics[width=\columnwidth]{m02_serie_exogenas.png}
-  \caption{Serie en logaritmos ($100\ln I_t$), precio del cobre en logaritmos e ICEN, enero 2002 -- julio 2026.}
+  \caption{Serie en logaritmos ($100\ln I_t$) y las ocho variables exógenas candidatas, enero 2002 -- julio 2026.}
   \label{fig:serie_exogenas}
 \end{figure}
 
 \subsection{Preparación y Transformación de la Serie}
 
-\textbf{Tratamiento de la pandemia.} Los meses de marzo de 2020 a junio de 2021 (confinamiento y rebote) son atípicos y se reemplazaron. Como se modela el índice en niveles, la imputación debe empalmar con los datos reales a ambos lados del tramo. El procedimiento, en logaritmos, fue: 1) estimar la estacionalidad típica de cada mes con los datos de 1994--2019 mediante una descomposición aditiva; 2) restarla a la serie; 3) interpolar linealmente el nivel desestacionalizado entre febrero de 2020 y julio de 2021; y 4) volver a sumar la estacionalidad de cada mes. Las exógenas no se imputaron, porque son fenómenos externos y sus valores durante la pandemia son reales.
+\textbf{Tratamiento de la pandemia.} Los meses de marzo de 2020 a junio de 2021 (confinamiento y rebote) son atípicos y se reemplazaron. Como se modela el índice en niveles, la imputación debe empalmar con los datos reales a ambos lados del tramo. El procedimiento, en logaritmos, fue: 1) estimar la estacionalidad típica de cada mes con los datos de 1994--2019 mediante una descomposición aditiva; 2) restarla a la serie; 3) interpolar linealmente el nivel desestacionalizado entre febrero de 2020 y julio de 2021; y 4) volver a sumar la estacionalidad de cada mes. Las exógenas no se imputaron: se usan sus valores observados.
 
-\textbf{Transformación logarítmica.} Antes de decidir la diferenciación, la serie se transformó con $z_t = 100\ln I_t$. El logaritmo estabiliza la varianza: en niveles, la dispersión de los meses dentro de cada año crece con el índice (la correlación entre nivel y dispersión anual es 0.86), mientras que en logaritmos esa correlación baja a $-0.33$ y la estacionalidad pasa de multiplicativa a aditiva. Además, las diferencias de $z_t$ se leen como tasas de crecimiento en puntos porcentuales y, al deshacer la transformación con $I_t = e^{z_t/100}$, el pronóstico del índice nunca es negativo. El cobre recibió la misma transformación, de modo que su coeficiente es una elasticidad. El ICEN no se transformó porque toma valores negativos (Fig.~\ref{fig:imputacion_log}).
+\textbf{Transformación logarítmica.} Antes de decidir la diferenciación, la serie se transformó con $z_t = 100\ln I_t$. El logaritmo estabiliza la varianza: en niveles, la dispersión de los meses dentro de cada año crece con el índice (la correlación entre nivel y dispersión anual es 0.86), mientras que en logaritmos esa correlación baja a $-0.33$ y la estacionalidad pasa de multiplicativa a aditiva. Además, las diferencias de $z_t$ se leen como tasas de crecimiento en puntos porcentuales y, al deshacer la transformación con $I_t = e^{z_t/100}$, el pronóstico del índice nunca es negativo. Los índices sectoriales y el cobre recibieron la misma transformación, de modo que sus coeficientes son elasticidades. El ICEN, que toma valores negativos, y las variables de calendario no se transformaron (Fig.~\ref{fig:imputacion_log}).
 
 \begin{figure}[H]
   \centering
@@ -202,18 +183,31 @@ donde $B$ es el operador de rezago y $\varepsilon_t$ es ruido blanco. Como $d+D=
 
 El entrenamiento abarca de enero de 2002 a diciembre de 2021 (240 meses, 81\%) y la prueba, de enero de 2022 a julio de 2026 (55 meses, 19\%). La prueba empieza después del tramo imputado de la pandemia, de modo que los modelos se evalúan solo con datos reales. Todas las decisiones (diferencias, órdenes, rezagos de las exógenas, hiperparámetros y arquitecturas) se tomaron con el entrenamiento; la prueba se usó únicamente para la evaluación final.
 
-\subsection{Modelo SARIMAX y Selección de Rezagos}
+\subsection{Modelo SARIMAX y Selección de las Variables Exógenas}
 
-Al incorporar las exógenas, el modelo pasa a ser un SARIMAX: una regresión cuyos errores siguen el SARIMA identificado,
+Al incorporar exógenas, el modelo pasa a ser un SARIMAX, es decir, una regresión dinámica cuyos errores siguen el SARIMA identificado \cite{box2015,hyndman2021}:
 \begin{equation}
-z_t = \beta_1\, 100\ln(\mathrm{cobre}_{t-L_1}) + \beta_2\, \mathrm{ICEN}_{t-L_2} + u_t,
+z_t = \sum_{j=1}^{k} \beta_j\, x_{j,\,t-L_j} + u_t,
 \label{eq:sarimax}
 \end{equation}
-con $u_t \sim$ SARIMA$(p,d,q)(P,D,Q)_{12}$. El coeficiente $\beta_1$ es una elasticidad (un cobre 10\% más caro cambia el índice en $\approx 10\beta_1$\%) y $\beta_2$, una semielasticidad (cada \textdegree C adicional de ICEN cambia el índice en $\approx \beta_2$\%).
+con $u_t \sim$ SARIMA$(p,d,q)(P,D,Q)_{12}$. Si la exógena está en $100\ln$, $\beta_j$ es una elasticidad. Si es el ICEN o una variable de calendario, $\beta_j$ es una semielasticidad: el cambio porcentual del índice por cada \textdegree C de anomalía o por cada día hábil adicional.
 
-El efecto de las exógenas no tiene por qué ser inmediato: un alza del cobre tarda meses en convertirse en más producción minera, y El Niño afecta la infraestructura con retraso. Por ello se probaron rezagos $L$ de 0 a 12 meses en dos pasos: 1) se calculó la correlación cruzada entre la serie y cada exógena, ambas con las mismas diferencias ($d=1$, $D=1$); y 2) para cada rezago se estimó un SARIMAX con una sola exógena y el orden base, y se eligió el rezago de menor BIC. El resultado fue $L_1=7$ meses para el cobre y $L_2=10$ meses para el ICEN. El rezago tiene, además, una ventaja práctica: los primeros $L$ meses del pronóstico usan valores ya observados de la exógena. El rezago 0 del ICEN no estaría disponible al momento de pronosticar, porque es una media móvil centrada.
+Las exógenas se eligieron con un procedimiento automático de cuatro pasos, aplicado solo a los datos de entrenamiento:
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Candidatas:} las ocho series de la Tabla~\ref{tab:series}.
+  \item \textbf{Rezago de cada candidata:} el efecto no tiene por qué ser inmediato. Un alza del cobre tarda meses en traducirse en más producción minera, y El Niño afecta la infraestructura con retraso. Para cada candidata y cada rezago se estimó un SARIMAX con esa sola variable y el orden base, y se eligió el rezago de menor BIC. Se probaron rezagos de 1 a 12 meses para los sectores y el cobre, y de 2 a 12 para el ICEN, porque es una media móvil centrada de tres meses y su valor del mes anterior aún no se conoce al pronosticar. Las variables de calendario entran sin rezago, porque se conocen de antemano. Como apoyo visual se usó la correlación cruzada entre la serie y cada candidata, ambas con $d=1$ y $D=1$.
+  \item \textbf{Filtro de colinealidad:} las candidatas, ya rezagadas y diferenciadas, se ordenaron por su BIC individual. Se descartaba una candidata si tenía $|r|>0.8$ con otra ya aceptada o un factor de inflación de la varianza (VIF) mayor a 5 \cite{obrien2007}. Las correlaciones se calcularon sobre las series diferenciadas para evitar relaciones espurias entre series con tendencia \cite{granger1974} (Fig.~\ref{fig:corr_exog}).
+  \item \textbf{Eliminación hacia atrás:} se estimó el SARIMAX con todas las candidatas que pasaron el filtro y se eliminó, una a una, la de mayor p-valor, hasta que todas fueron significativas al 5\%. Si ninguna lo hubiera sido, se habría conservado la de menor p-valor individual.
+\end{enumerate}
 
-Se estimaron tres versiones con el mismo orden: solo cobre, solo ICEN y cobre + ICEN (modelo propuesto). Como las diferencias de BIC entre estas versiones y el SARIMA son menores a 2 puntos (evidencia débil), entre modelos del mismo orden se usó el AIC, el criterio orientado al pronóstico, y se mantuvieron ambas exógenas por su sentido económico.
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_06c_correlacion_exogenas.png}
+  \caption{Correlación entre las candidatas rezagadas y diferenciadas ($d=1$, $D=1$). Ningún par supera el umbral $|r|>0.8$.}
+  \label{fig:corr_exog}
+\end{figure}
+
+Los rezagos elegidos fueron 7 meses para la minería metálica, 6 para la manufactura de recursos primarios, 4 para la manufactura no primaria, 8 para la construcción, 7 para el cobre y 10 para el ICEN. Ninguna candidata se descartó por colinealidad (el VIF máximo fue 1.57). La eliminación hacia atrás retiró, en este orden, la minería, la manufactura no primaria, la Semana Santa, la construcción, la manufactura primaria y el cobre. Quedaron los \textbf{días hábiles} del mes y el \textbf{ICEN en $t-10$}, de modo que el modelo propuesto es un SARIMAX$(0,1,1)(0,1,1)_{12}$ con esas dos exógenas. Como referencia también se estimaron las variantes con cada una por separado. Ambas exógenas están disponibles al momento de pronosticar: los días hábiles son determinísticos, y el ICEN con 10 meses de rezago ya se conoce durante los primeros 10 meses del pronóstico.
 
 \subsection{Modelo Prophet}
 
@@ -222,16 +216,16 @@ Como alternativa al enfoque de Box-Jenkins se usó Prophet \cite{taylor2018}, un
 z_t = g(t) + s(t) + \boldsymbol{\gamma}^{\top}\mathbf{x}_t + \varepsilon_t,
 \label{eq:prophet}
 \end{equation}
-donde $g(t)$ es una tendencia lineal por tramos con puntos de cambio y $s(t)$ es una estacionalidad anual representada con 6 armónicos de Fourier (sin estacionalidad semanal ni diaria, porque los datos son mensuales). Se ajustó sobre la misma serie $z_t = 100\ln I_t$ en dos versiones: univariada y con los regresores del SARIMAX ($\mathbf{x}_t$: cobre en $t-7$ e ICEN en $t-10$). Los hiperparámetros \code{changepoint\_prior\_scale} $\in\{0.01, 0.05, 0.1, 0.5\}$ y \code{seasonality\_prior\_scale} $\in\{0.1, 1, 10\}$ se eligieron sin mirar la prueba, con una validación interna: se entrena hasta diciembre de 2016 y se mide el RMSE del pronóstico a un mes de enero de 2017 a diciembre de 2019. Como Prophet no tiene parte autorregresiva, en el pronóstico a un mes se reestima cada mes con origen móvil. Los coeficientes de los regresores se compararon con los del SARIMAX.
+donde $g(t)$ es una tendencia lineal por tramos con puntos de cambio y $s(t)$ es una estacionalidad anual representada con 6 armónicos de Fourier (sin estacionalidad semanal ni diaria, porque los datos son mensuales). Se ajustó sobre la misma serie $z_t = 100\ln I_t$ en dos versiones: univariada y con los regresores del SARIMAX ($\mathbf{x}_t$: días hábiles e ICEN en $t-10$). Los hiperparámetros \code{changepoint\_prior\_scale} $\in\{0.01, 0.05, 0.1, 0.5\}$ y \code{seasonality\_prior\_scale} $\in\{0.1, 1, 10\}$ se eligieron sin mirar la prueba, con una validación interna: se entrena hasta diciembre de 2016 y se mide el RMSE del pronóstico a un mes de enero de 2017 a diciembre de 2019. Como Prophet no tiene parte autorregresiva, en el pronóstico a un mes se reestima cada mes con origen móvil. Los coeficientes de los regresores se compararon con los del SARIMAX.
 
 \subsection{Esquemas de Pronóstico y Métricas de Evaluación}
 
 Cada modelo se estimó solo con el entrenamiento y pronosticó $z_t$, que luego se llevó a la escala del índice con $I_t = e^{z_t/100}$. A partir del índice se calculó la variación interanual, tomando como base el índice real de hace 12 meses, y se comparó con la cifra oficial del BCRP. Se evaluaron dos esquemas:
 \begin{itemize}[leftmargin=*]
   \item \textbf{Horizonte completo:} los 55 meses de prueba se pronostican de una sola vez desde diciembre de 2021.
-  \item \textbf{A un mes:} cada mes se pronostica el siguiente con el dato real del mes anterior, manteniendo fijos los parámetros del entrenamiento. Es el uso real de un modelo mensual y el escenario común en el que se comparan todos los modelos.
+  \item \textbf{A un mes:} cada mes se pronostica el siguiente con el dato real del mes anterior, manteniendo fijos los parámetros del entrenamiento. Es el escenario común en el que se comparan todos los modelos.
 \end{itemize}
-En la prueba, los SARIMAX usan los valores observados de las exógenas. A un mes esto no da ventaja, porque con rezagos de 7 y 10 meses esos valores ya se conocen; en el horizonte completo, más allá de esos rezagos, la ventaja frente al SARIMA es optimista. Como referencia se usaron dos modelos ingenuos: el \textbf{ingenuo estacional} (el índice repite el del mismo mes del año anterior) y el \textbf{ingenuo con último crecimiento} (el índice crece al último ritmo interanual conocido).
+En la prueba, los SARIMAX usan los valores observados de las exógenas. A un mes esto no da ventaja, porque los días hábiles se conocen de antemano y el ICEN con 10 meses de rezago ya está observado. En el horizonte completo, en cambio, más allá de 10 meses el ICEN tendría que pronosticarse en la práctica, así que la ventaja frente al SARIMA es optimista. Como referencia se usaron dos modelos ingenuos: el \textbf{ingenuo estacional} (el índice repite el del mismo mes del año anterior) y el \textbf{ingenuo con último crecimiento} (el índice crece al último ritmo interanual conocido).
 
 Las métricas se calcularon sobre el índice: MSE, RMSE y MAE (en puntos del índice) y MAPE. El MAPE es interpretable porque el índice toma valores entre 150 y 230 y nunca se acerca a cero. Se añadieron el RMSE de la variación interanual (en puntos porcentuales), el Índice de Error Compuesto (IEC), que promedia las cuatro métricas normalizadas como $m/(1+m)$, el MASE \cite{hyndman2006} y la U de Theil \cite{theil1966}:
 \begin{equation}
@@ -246,9 +240,11 @@ donde el denominador del MASE es el MAE del ingenuo estacional en el entrenamien
 
 Por último, se verificó que los residuos del modelo propuesto se comporten como ruido blanco: sin autocorrelación (Ljung-Box), con varianza constante (prueba ARCH \cite{engle1982}) y con distribución normal (Jarque-Bera \cite{jarque1980}). Se descartaron los primeros 13 residuos, que corresponden a la inicialización de las diferencias.
 
+\textbf{Pronóstico fuera de la muestra.} Tras la evaluación, el SARIMAX propuesto se reestimó con toda la muestra (enero de 2002 a julio de 2026) y se pronosticaron los 12 meses siguientes, de agosto de 2026 a julio de 2027, con intervalos de confianza al 80\% y al 95\%. Los días hábiles futuros se obtienen del calendario. Del ICEN en $t-10$ ya se conocen los primeros 10 meses; los 2 restantes se pronosticaron con un ARIMA$(p,0,q)$ con constante, con $p,q\leq2$, elegido por el menor BIC. Como referencia, el pronóstico se comparó con el del SARIMA sin exógenas.
+
 \subsection{Modelos de Machine Learning: Boosting y AutoML}
 
-Los árboles de decisión no requieren estacionariedad, pero no extrapolan: solo predicen valores dentro del rango visto en el entrenamiento. En la prueba, el índice supera el máximo del entrenamiento en el 78\% de los meses, por lo que se descartó como objetivo. En su lugar se modeló el crecimiento mensual logarítmico, $r_t = \ln(I_t/I_{t-1})$ (\code{Log\_Return}), y el índice se reconstruyó con $\hat{I}_t = I_{t-1}\,e^{\hat{r}_t}$. Todos los predictores se conocen al cierre del mes $t-1$, para evitar fuga de información (Tabla~\ref{tab:predictores}).
+Los árboles de decisión no requieren estacionariedad, pero no extrapolan: solo predicen valores dentro del rango visto en el entrenamiento. En la prueba, el índice supera el máximo del entrenamiento en el 78\% de los meses, por lo que se descartó como objetivo. En su lugar se modeló el crecimiento mensual logarítmico, $r_t = \ln(I_t/I_{t-1})$ (\code{Log\_Return}), y el índice se reconstruyó con $\hat{I}_t = I_{t-1}\,e^{\hat{r}_t}$. Para evitar fuga de información, todos los predictores se conocen al cierre del mes $t-1$; los días hábiles del mes $t$ también, porque vienen del calendario (Tabla~\ref{tab:predictores}).
 
 \begin{table}[H]
 \centering
@@ -263,7 +259,7 @@ Rezagos del objetivo & $r_{t-1},\dots,r_{t-12}$; $r_{t-12}$ recoge la estacional
 Cambio del mes anterior & Rendimiento simple y variación absoluta del índice en $t-1$. \\
 Medias móviles relativas & $\ln(I_{t-1}/\mathrm{MA}_k)$ para $k=3,6,9$; se usa la versión relativa porque el nivel de la media móvil no extrapola. \\
 Calendario & Mes del año. \\
-Exógenas & Crecimiento logarítmico del cobre en $t-7$ e ICEN en $t-10$ (los rezagos del SARIMAX). \\
+Exógenas & Las seleccionadas para el SARIMAX: días hábiles del mes $t$ e ICEN en $t-10$. \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -274,11 +270,11 @@ Con los mismos predictores, objetivo y partición se ejecutó \code{H2OAutoML} \
 
 \subsection{Aprendizaje Profundo: Redes Recurrentes y Transformers}
 
-\textbf{Redes recurrentes.} Se entrenaron una LSTM \cite{hochreiter1997}, una GRU \cite{cho2014} y sus versiones bidireccionales \cite{schuster1997}. Las dos direcciones recorren la misma ventana de meses ya observados, por lo que el mes pronosticado nunca entra a la red. El objetivo es el mismo $r_t$ de los modelos de boosting. Cada entrada es una ventana de 24 meses, que cubre dos ciclos estacionales y los rezagos 7 y 10 de las exógenas. Se probaron dos conjuntos de variables por paso: sin exógenas ($r_t$ y el mes del año codificado como $\sin$ y $\cos$ de $2\pi\,\mathrm{mes}/12$) y con exógenas (además, el crecimiento del cobre y el ICEN). Los escaladores \code{MinMaxScaler} se ajustaron solo con el entrenamiento. La arquitectura tiene dos capas recurrentes (128 y 64 neuronas en la LSTM; 50 y 64 en la GRU), seguidas de capas densas de 25 y 1 neuronas. En las versiones bidireccionales, cada capa recurrente se envuelve en \code{Bidirectional}. Las redes se entrenaron con el optimizador Adam, pérdida MSE, lotes de tamaño 1 y 5 épocas, en GPU (Keras 3 sobre PyTorch). La inclusión del mes del año se decidió sin mirar la prueba, con la misma validación interna 2017--2019 usada en Prophet. Se fijó la semilla y se repitió el entrenamiento con 3 semillas para medir la influencia del azar.
+\textbf{Redes recurrentes.} Se entrenaron una LSTM \cite{hochreiter1997}, una GRU \cite{cho2014} y sus versiones bidireccionales \cite{schuster1997}. Las dos direcciones recorren la misma ventana de meses ya observados, por lo que el mes pronosticado nunca entra a la red. El objetivo es el mismo $r_t$ de los modelos de boosting. Cada entrada es una ventana de 24 meses, que cubre dos ciclos estacionales y el rezago 10 del ICEN. Se probaron dos conjuntos de variables por paso. Sin exógenas: $r_t$ y el mes del año, codificado como $\sin$ y $\cos$ de $2\pi\,\mathrm{mes}/12$. Con exógenas: además, el ICEN y los días hábiles. El ICEN entra con un mes de atraso, de modo que el valor más reciente de la ventana es el de $t-2$. En cada paso, los días hábiles corresponden al mes siguiente, de modo que el último paso contiene los del mes pronosticado, que se conocen de antemano. Los escaladores \code{MinMaxScaler} se ajustaron solo con el entrenamiento. La arquitectura tiene dos capas recurrentes (128 y 64 neuronas en la LSTM; 50 y 64 en la GRU), seguidas de capas densas de 25 y 1 neuronas. En las versiones bidireccionales, cada capa recurrente se envuelve en \code{Bidirectional}. Las redes se entrenaron con el optimizador Adam, pérdida MSE, lotes de tamaño 1 y 5 épocas, en GPU (Keras 3 sobre PyTorch). La inclusión del mes del año se decidió sin mirar la prueba, con la misma validación interna 2017--2019 usada en Prophet. Se fijó la semilla y se repitió el entrenamiento con 3 semillas para medir la influencia del azar.
 
-\textbf{Transformer entrenado desde cero.} Se implementó un Transformer de solo codificador \cite{vaswani2017} con parches, inspirado en PatchTST \cite{nie2023}. La ventana de 24 meses se divide en parches de 1, 3 o 6 meses (24, 8 o 4 \textit{tokens}). Cada parche se proyecta a un vector de dimensión 32 y recibe un \textit{embedding} posicional aprendido, ya que la atención no conoce el orden por sí sola. Luego pasa por 2 bloques con autoatención multicabeza (4 cabezas) y una red \textit{feed-forward} de 64 neuronas, con \textit{dropout} de 0.1. El entrenamiento usa mini-lotes de 16 ventanas en dos etapas: primero se elige el número de épocas con parada temprana (paciencia de 25 y máximo de 200 épocas), validando con los últimos 36 meses del entrenamiento; después la red se reentrena con todo el entrenamiento durante ese número de épocas. El largo del parche se eligió con la misma validación 2017--2019 de las redes recurrentes. El modelo final se entrenó con 3 semillas y se reporta también el promedio de sus pronósticos. La matriz de atención del último bloque se analizó para ver a qué meses de la ventana atiende la red.
+\textbf{Transformer entrenado desde cero.} Se implementó un Transformer de solo codificador \cite{vaswani2017} con parches, inspirado en PatchTST \cite{nie2023}. La ventana de 24 meses se divide en parches de 1, 3 o 6 meses (24, 8 o 4 \textit{tokens}). Cada parche se proyecta a un vector de dimensión 32 y recibe un \textit{embedding} posicional aprendido, ya que la atención no conoce el orden por sí sola. Luego pasa por 2 bloques con autoatención multicabeza (4 cabezas) y una red \textit{feed-forward} de 64 neuronas, con \textit{dropout} de 0.1. El entrenamiento usa mini-lotes de 16 ventanas en dos etapas: primero se elige el número de épocas con parada temprana (paciencia de 25 y máximo de 200 épocas), validando con los últimos 36 meses del entrenamiento; después la red se reentrena con todo el entrenamiento durante ese número de épocas. Se probaron los mismos dos conjuntos de variables de las redes recurrentes, sin y con exógenas. Con la misma validación 2017--2019 se eligió el largo del parche de cada conjunto, y el conjunto con menor RMSE de validación se tomó como el Transformer principal. El modelo final se entrenó con 3 semillas y se reporta también el promedio de sus pronósticos. La matriz de atención del último bloque se analizó para ver a qué meses de la ventana atiende la red.
 
-\textbf{Transformers preentrenados.} Se evaluaron además tres modelos fundacionales de series de tiempo con pesos públicos, usados sin reentrenar (\textit{zero-shot}). TimesFM-3, de Google \cite{das2024,timesfm3}, es un decodificador de unos 330 millones de parámetros. PatchTST-FM-r2, de IBM \cite{nie2023,patchtstfm}, tiene unos 385 millones de parámetros y usa parches de 16 pasos con desplazamiento de 8. Toto 2.0, de Datadog \cite{toto2026}, se probó en tamaños de 22 millones, 313 millones y 1\,000 millones de parámetros; el de 2\,500 millones no cabe en una GPU de 8 GB. Las licencias de los pesos permiten la investigación académica: TimesFM Non-Commercial License v1.0 en TimesFM-3, Apache 2.0/OpenMDW 1.0 en PatchTST-FM-r2 y Apache 2.0 en Toto 2.0. Cada modelo recibe el índice en niveles, con la pandemia imputada, desde enero de 2002 hasta el mes anterior. Su pronóstico es la mediana (cuantil 0.5) del mes siguiente, con el mismo esquema a un mes y origen móvil de los demás modelos. TimesFM-3 es el único que admite exógenas, por lo que se evaluó en dos versiones: univariada y con el cobre en $t-7$ y el ICEN en $t-10$ como covariables, conocidas al momento de pronosticar. Como no se estima ningún parámetro con estos datos, lo único que se decide es el candidato. Se eligió el de menor RMSE del índice en la validación 2017--2019, el mismo criterio de las redes recurrentes y del Transformer entrenado desde cero; también se reporta el RMSE de cada año, porque 2017 fue un año de El Niño Costero. En la prueba, el elegido se compara con el Transformer entrenado desde cero, el SARIMAX, el SARIMA y los ingenuos mediante Diebold-Mariano. La correlación de Spearman entre el RMSE de validación y el de prueba de los candidatos indica si la validación los ordena igual que la prueba.
+\textbf{Transformers preentrenados.} Se evaluaron además tres modelos fundacionales de series de tiempo con pesos públicos, usados sin reentrenar (\textit{zero-shot}). TimesFM-3, de Google \cite{das2024,timesfm3}, es un decodificador de unos 330 millones de parámetros. PatchTST-FM-r2, de IBM \cite{nie2023,patchtstfm}, tiene unos 385 millones de parámetros y usa parches de 16 pasos con desplazamiento de 8. Toto 2.0, de Datadog \cite{toto2026}, se probó en tamaños de 22 millones, 313 millones y 1\,000 millones de parámetros; el de 2\,500 millones no cabe en una GPU de 8 GB. Las licencias de los pesos permiten la investigación académica: TimesFM Non-Commercial License v1.0 en TimesFM-3, Apache 2.0/OpenMDW 1.0 en PatchTST-FM-r2 y Apache 2.0 en Toto 2.0. Cada modelo recibe el índice en niveles, con la pandemia imputada, desde enero de 2002 hasta el mes anterior. Su pronóstico es la mediana (cuantil 0.5) del mes siguiente, con el mismo esquema a un mes y origen móvil de los demás modelos. TimesFM-3 es el único que admite exógenas, por lo que se evaluó en dos versiones: univariada y con los días hábiles y el ICEN en $t-10$ como covariables, conocidas al momento de pronosticar. Como no se estima ningún parámetro con estos datos, lo único que se decide es el candidato. Se eligió el de menor RMSE del índice en la validación 2017--2019, el mismo criterio de las redes recurrentes y del Transformer entrenado desde cero; también se reporta el RMSE de cada año, porque 2017 fue un año de El Niño Costero. En la prueba, el elegido se compara con el Transformer entrenado desde cero, el SARIMAX, el SARIMA y los ingenuos mediante Diebold-Mariano. La correlación de Spearman entre el RMSE de validación y el de prueba de los candidatos indica si la validación los ordena igual que la prueba.
 
 \subsection{Detección de Anomalías}
 
@@ -286,303 +282,483 @@ De forma complementaria, se buscaron los meses en que el sector se comportó de 
 
 \subsection{Herramientas}
 
-El análisis se implementó en Python con \code{pandas} y \code{numpy} para el manejo de datos; \code{statsmodels} para la descomposición, las pruebas estadísticas y la estimación ARIMA/SARIMAX; \code{prophet}; \code{scikit-learn}, \code{xgboost}, \code{lightgbm} y \code{catboost} para los modelos de boosting; \code{h2o} para AutoML e Isolation Forest; Keras 3 con PyTorch como motor para las redes neuronales, entrenadas en GPU; y los pesos publicados en Hugging Face (\code{google/timesfm-3.0-pytorch}, \code{ibm-granite/granite-timeseries-patchtst-fm-r2} y la familia \code{Datadog/Toto-2.0}) para los Transformers preentrenados.
+El análisis se implementó en Python. Las series se descargaron con \code{requests}; como la API del BCRP rechaza algunas conexiones TLS desde Python (error 403), se usa \code{curl} como respaldo cuando la respuesta no es JSON. Se usaron \code{pandas} y \code{numpy} para el manejo de datos; \code{holidays} para los feriados nacionales del Perú; \code{statsmodels} para la descomposición, las pruebas estadísticas y la estimación ARIMA/SARIMAX; \code{prophet}; \code{scikit-learn}, \code{xgboost}, \code{lightgbm} y \code{catboost} para los modelos de boosting; \code{h2o} para AutoML e Isolation Forest; Keras 3 con PyTorch como motor para las redes neuronales, entrenadas en GPU; y los pesos publicados en Hugging Face (\code{google/timesfm-3.0-pytorch}, \code{ibm-granite/granite-timeseries-patchtst-fm-r2} y la familia \code{Datadog/Toto-2.0}) para los Transformers preentrenados.
 
 \section{Resultados}
 
-\subsection{Modelos Base}
+\subsection{Estacionariedad e Identificación}
+
+La Tabla~\ref{tab:estacionariedad} muestra las pruebas sobre las cuatro versiones de $z_t$ en el entrenamiento. Solo la versión con $d=1$ y $D=1$ cumple los tres criterios. Con una sola diferencia regular, el ADF rechaza la raíz unitaria, pero la autocorrelación en el rezago 12 sigue en 0.87; con una sola diferencia estacional, el KPSS rechaza la estacionariedad.
 
 \begin{table}[H]
 \centering
-\caption{Métricas de modelos base en test}
-\label{tab:base}
+\caption{Pruebas de estacionariedad de $z_t = 100\ln I_t$ (entrenamiento)}
+\label{tab:estacionariedad}
 \scriptsize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}lrrrrrr@{}}
+\begin{tabularx}{\columnwidth}{@{}Xcccc@{}}
 \toprule
-\textbf{Modelo} & \textbf{Acc.} & \textbf{F1} & \textbf{Kappa} & \textbf{AUC} & \textbf{Gini} \\
+\textbf{Versión} & \textbf{p ADF} & \textbf{p KPSS} & \textbf{FAC(12)} & \textbf{Estacionaria} \\
 \midrule
-KNN & 0.7583 & 0.6256 & 0.4487 & 0.8537 & 0.7074 \\
-Naive Bayes & 0.7781 & 0.6763 & 0.5119 & 0.8711 & 0.7422 \\
-SVM & 0.7483 & 0.5914 & 0.4099 & 0.8026 & 0.6052 \\
-Reg. Logística & \textbf{0.8179} & \textbf{0.6893} & \textbf{0.5605} & \textbf{0.8822} & \textbf{0.7644} \\
-MLP & 0.8013 & 0.6629 & 0.5221 & 0.8465 & 0.6931 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Entre los cinco modelos base (Tabla~\ref{tab:base}), la Regresión Logística se impuso con claridad, encabezando todas las métricas con un ROC AUC de 0.8822 y accuracy de 0.8179. El dato es más interesante de lo que parece: una frontera lineal regularizada superó a alternativas más flexibles como SVM RBF o la red MLP, lo que sugiere que las señales clínicas del problema son relativamente separables y no exigen, por sí solas, modelos muy complejos. Queda por ver si los ensambles logran exprimir algo más de esa señal.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{10_matrices_confusion_modelos_base.png}
-  \caption{Matrices de confusión de modelos base.}
-  \label{fig:cm_base}
-\end{figure}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{11_roc_modelos_base.png}
-  \caption{Curvas ROC de modelos base.}
-  \label{fig:roc_base}
-\end{figure}
-
-\subsection{Modelos de Ensamble}
-
-\begin{table}[H]
-\centering
-\caption{Métricas de modelos de ensamble en test}
-\label{tab:ensambles}
-\scriptsize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}lrrrrr@{}}
-\toprule
-\textbf{Modelo} & \textbf{Acc.} & \textbf{F1} & \textbf{Kappa} & \textbf{AUC} & \textbf{Gini} \\
-\midrule
-Bagging & \textbf{0.8344} & \textbf{0.7222} & \textbf{0.6043} & \textbf{0.8937} & \textbf{0.7873} \\
-AdaBoost & 0.8013 & 0.6667 & 0.5252 & 0.8499 & 0.6999 \\
-Gradient Boosting & 0.8013 & 0.6629 & 0.5221 & 0.8596 & 0.7193 \\
-XGBoost & 0.8146 & 0.6989 & 0.5652 & 0.8738 & 0.7476 \\
-LightGBM & 0.8278 & 0.7204 & 0.5962 & 0.8651 & 0.7302 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-La respuesta a esa pregunta aparece en la Tabla~\ref{tab:ensambles}: al pasar a los ensambles, Bagging de árboles tomó la delantera y se convirtió, además, en el mejor modelo de todo el estudio, encabezando las cinco métricas reportadas (accuracy, F1, kappa, ROC AUC y Gini). La competencia, sin embargo, fue estrecha ---LightGBM quedó muy cerca en F1 y accuracy, y XGBoost fue el segundo mejor en ROC AUC---, lo que ya anticipa que la ventaja del ganador no es amplia y conviene contrastarla con un enfoque aún más elaborado.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{16_matrices_confusion_ensambles.png}
-  \caption{Matrices de confusión de modelos de ensamble.}
-  \label{fig:cm_ensambles}
-\end{figure}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{17_roc_ensambles.png}
-  \caption{Curvas ROC de modelos de ensamble.}
-  \label{fig:roc_ensambles}
-\end{figure}
-
-\subsection{Comparación Global y Stacking}
-
-\begin{table}[H]
-\centering
-\caption{Ranking final por ROC AUC}
-\label{tab:ranking}
-\scriptsize
-\begin{tabular}{@{}rlrr@{}}
-\toprule
-\textbf{Rank} & \textbf{Modelo} & \textbf{AUC} & \textbf{F1} \\
-\midrule
-1 & Bagging de árboles & \textbf{0.8937} & \textbf{0.7222} \\
-2 & Stacking Top-3 & 0.8889 & 0.7174 \\
-3 & Regresión Logística & 0.8822 & 0.6893 \\
-4 & XGBoost & 0.8738 & 0.6989 \\
-5 & Naive Bayes & 0.8711 & 0.6763 \\
-6 & LightGBM & 0.8651 & 0.7204 \\
-7 & Gradient Boosting & 0.8596 & 0.6629 \\
-8 & KNN & 0.8537 & 0.6256 \\
-9 & AdaBoost & 0.8499 & 0.6667 \\
-10 & MLP & 0.8465 & 0.6629 \\
-11 & SVM & 0.8026 & 0.5914 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{20_metricas_globales_modelos.png}
-  \caption{Comparación global de métricas entre modelos.}
-  \label{fig:métricas_globales}
-\end{figure}
-
-Ese enfoque más elaborado es el Stacking Top-3, que combinó los tres modelos con mejor ROC AUC en validación cruzada (LightGBM, Bagging y XGBoost) sobre una Regresión Logística como meta-aprendiz. El resultado, no obstante, refuerza lo anterior: alcanzó un ROC AUC de 0.8889, apenas 0.0048 por debajo del Bagging individual. El ranking global (Tabla~\ref{tab:ranking}) lo confirma dejando al Bagging en primer lugar. La lectura es clara: añadir complejidad no rindió mejora, de modo que se conserva el Bagging como modelo final por ser igual de preciso y más simple de operar.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{21_stacking_matriz_roc.png}
-  \caption{Evaluación del Stacking Top-3: matriz de confusión y curva ROC.}
-  \label{fig:stacking}
-\end{figure}
-
-\subsection{Lift por Decil}
-
-El análisis de lift evalúa la utilidad práctica del score predictivo para priorizar pacientes de mayor riesgo. Un lift superior a 1 indica que el modelo captura más casos positivos que una selección aleatoria. Las curvas de lift muestran que los modelos con mejor ranking concentran una mayor tasa de positivos en los primeros deciles. Para el modelo ganador (Bagging), el decil de mayor score (10\% superior) alcanza una tasa de positivos de 77.4\% frente a una tasa base de 29.8\% ---un lift de 2.60--- y captura el 26.7\% de todos los casos con diabetes del test; al ampliar al 20\% de mayor score se captura el 51.1\% de los positivos. Estas cifras cuantifican la utilidad del score para priorización.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{18_lift_deciles_ensambles.png}
-  \caption{Lift por decil en modelos de ensamble.}
-  \label{fig:lift_deciles}
-\end{figure}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{19_lift_acumulado_ensambles.png}
-  \caption{Lift acumulado en modelos de ensamble.}
-  \label{fig:lift_acumulado}
-\end{figure}
-
-Desde una perspectiva operativa, este tipo de análisis es especialmente útil en salud pública: si los recursos diagnósticos son limitados, un modelo con buen lift permite priorizar a quienes tienen mayor probabilidad de diabetes para confirmación clínica.
-
-\section{Interpretabilidad}
-
-La interpretabilidad responde a una pregunta que la métrica de desempeño no contesta: \emph{por qué} el modelo predice lo que predice. Se trabajó con SHAP, un enfoque basado en valores de Shapley que descompone cada predicción en la contribución individual de cada variable \cite{lundberg2017}. Dado que el modelo ganador Bagging de árboles de \code{scikit-learn} no es compatible directamente con \code{TreeExplainer}, se usó \code{KernelExplainer} para explicar la probabilidad de la clase positiva del ganador, con 80 observaciones de entrenamiento como background y 40 instancias de test explicadas (\code{nsamples}$=200$); esta configuración acotada responde al alto costo del método basado en muestreo. Además, se incluyó un análisis complementario con \code{TreeExplainer} sobre XGBoost, por ser el mejor modelo de árbol compatible con ese método, lo que permite verificar si las conclusiones se sostienen entre modelos distintos.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{22_ganador_importancia_global_shap.png}
-  \caption{Importancia global SHAP del modelo ganador: Bagging de árboles.}
-  \label{fig:shap_bar_bagging}
-\end{figure}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{22_ganador_beeswarm_shap.png}
-  \caption{Distribución SHAP del modelo ganador.}
-  \label{fig:shap_beeswarm_bagging}
-\end{figure}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{23_complemento_arbol_importancia_global_shap.png}
-  \caption{Importancia global SHAP complementaria para XGBoost.}
-  \label{fig:shap_bar_xgb}
-\end{figure}
-
-\textbf{Importancia global (Fig.~\ref{fig:shap_bar_bagging}).} La barra ordena las variables por el promedio del valor absoluto de SHAP, es decir, cuánto mueven la predicción en promedio. \code{Glucose} domina con un impacto medio cercano a $0.14$, casi el doble que \code{BMI} (segunda, $\approx0.076$). Le siguen \code{Age} ($\approx0.054$) y \code{DiabetesPedigreeFunction} ($\approx0.043$), y por debajo \code{Pregnancies}, \code{Insulin}, \code{SkinThickness} y \code{BloodPressure}. Este orden es prácticamente idéntico en el modelo complementario XGBoost (Fig.~\ref{fig:shap_bar_xgb}), lo que indica que la jerarquía de variables no es un artefacto de un modelo concreto, sino una señal robusta de los datos.
-
-\textbf{Dirección del efecto (Fig.~\ref{fig:shap_beeswarm_bagging}).} El gráfico beeswarm añade el sentido de cada contribución: cada punto es un paciente, su posición horizontal es el efecto sobre la probabilidad predicha y el color codifica el valor de la variable (rojo alto, azul bajo). La lectura de las tres variables principales es clínicamente coherente. En \code{Glucose}, los valores altos (rojos) se ubican a la derecha ---suman probabilidad de diabetes--- y los bajos (azules) a la izquierda; la relación es fuerte y prácticamente monótona, con contribuciones que llegan a $+0.35$. En \code{BMI} ocurre lo mismo: mayor índice de masa corporal empuja hacia la clase positiva, consistente con el papel de la obesidad como factor de riesgo. En \code{DiabetesPedigreeFunction}, los valores altos ---mayor carga de antecedentes familiares--- también aportan en dirección positiva. \code{Age} sigue la misma tendencia, aunque con más dispersión alrededor de cero.
-
-\textbf{Contraste con el análisis bivariado.} Un resultado interesante es el de \code{Insulin}: fue el segundo predictor por tamaño de efecto de Mann-Whitney, pero aquí queda entre los de menor aporte. La explicación es que su información está en buena parte contenida en \code{Glucose} ---ambas correlacionan $r=0.68$--- y que su 20\% de faltantes se imputó con la mediana, lo que reduce su varianza útil; el modelo obtiene esa señal principalmente a través de \code{Glucose}, por lo que la contribución \emph{marginal} de \code{Insulin} se diluye. Esto ilustra la diferencia entre la relevancia \emph{individual} de una variable (Mann-Whitney) y su aporte \emph{condicional} dentro de un modelo multivariado (SHAP), y muestra por qué ambos análisis se complementan.
-
-\section{Discusión}
-
-Los resultados muestran que un preprocesamiento cuidadoso ---imputación y límites de winsorizing calculados solo en train, más escalado robusto--- fue tan determinante como la elección del algoritmo, sobre todo para los modelos sensibles a escala y outliers (KNN, SVM, MLP).
-
-El hecho de que Bagging supere ligeramente a XGBoost, LightGBM y Stacking indica que, para este dataset, reducir varianza mediante múltiples árboles bootstrap fue más efectivo que los modelos boosting más complejos. La diferencia con el Stacking es mínima (0.0048 en ROC AUC), por lo que ambos son competitivos; se prefirió Bagging por su mayor ROC AUC y F1 y su menor complejidad operativa. Es esperable, además, que las diferencias tan estrechas entre los modelos del top se estabilicen ---o incluso cambien de orden--- con un volumen de datos mayor, lo que refuerza la idea de que la elección final debe leerse junto con sus limitaciones y no como una ventaja definitiva.
-
-En términos clínicos, el modelo no reemplaza las pruebas diagnósticas. Su valor está en la priorización: ordenar pacientes por riesgo y apoyar circuitos de confirmación con glucemia, HbA1c o prueba de tolerancia oral a la glucosa. Esto dialoga directamente con el contexto peruano descrito, donde una de las brechas principales no es la falta de criterios diagnósticos, sino la heterogeneidad en tiempos, disponibilidad de pruebas y seguimiento.
-
-\subsection{Impacto Esperado en el Circuito de Atención}
-\label{sec:impacto}
-
-Como se describió en el contexto peruano, el diagnóstico puede resolverse rápido cuando hay laboratorio disponible, pero el sistema no lo logra de manera homogénea. Las demoras aparecen cuando el paciente no llega en ayunas, cuando debe regresar para una segunda prueba, cuando no hay HbA1c disponible o cuando se pierde continuidad entre resultado anormal y confirmación médica. El modelo puede contribuir en tres puntos:
-
-\begin{enumerate}[leftmargin=1.3em,itemsep=1pt]
-  \item \textbf{Triaje tras la medición inicial:} una vez registradas las variables de entrada del paciente ---incluida una medición de glucosa---, usar el score para clasificar a los pacientes en riesgo alto, medio y bajo.
-  \item \textbf{Laboratorio:} priorizar HbA1c o glucemia confirmatoria para los pacientes con score alto, reduciendo visitas repetidas.
-  \item \textbf{Seguimiento:} generar una lista ordenada de pacientes que no deberían perderse en el circuito de control de crónicos.
-\end{enumerate}
-
-\begin{table}[H]
-\centering
-\caption{Cómo el modelo puede reducir fricciones operativas}
-\label{tab:impacto_modelo}
-\scriptsize
-\begin{tabularx}{\columnwidth}{@{}lX@{}}
-\toprule
-\textbf{Problema identificado} & \textbf{Uso propuesto del modelo} \\
-\midrule
-Paciente no llega en ayunas & Si el score es alto, priorizar HbA1c el mismo día cuando esté disponible. \\
-Capacidad limitada de consulta & Ordenar pacientes por riesgo para usar cupos rápidos en quienes tienen mayor probabilidad de diabetes. \\
-Demora entre resultado y confirmación & Activar circuito corto para scores altos: segunda prueba o cita de confirmación prioritaria. \\
-Subregistro y seguimiento débil & Guardar score y predicción como variable de vigilancia para control posterior. \\
-Sobrecarga hospitalaria & Derivar casos de menor riesgo a seguimiento programado en primer nivel y acelerar casos de alto riesgo. \\
+Sin diferencias & 0.4168 & $\leq 0.01$ & 0.8679 & No \\
+$d=1$ & 0.0115 & $\geq 0.10$ & 0.8746 & No \\
+$D=1$ & 0.1417 & 0.0171 & $-0.0055$ & No \\
+$d=1$, $D=1$ & $<0.0001$ & $\geq 0.10$ & $-0.4709$ & Sí \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-En un escenario ideal, el modelo se integraría a una estrategia tipo HEARTS-D en atención primaria: el personal toma variables simples, calcula el score, prioriza confirmación y reduce derivaciones innecesarias al hospital. La reducción no se expresa como ``curar'' la diabetes, sino como disminuir tiempos muertos, mejorar detección oportuna y concentrar recursos en quienes tienen mayor probabilidad de requerir diagnóstico y manejo temprano \cite{ops2024}.
+La Tabla~\ref{tab:identificacion} resume el mejor modelo de cada familia según el BIC. Los modelos AR, MA y ARMA, que tienen las diferencias pero no términos estacionales, dejan autocorrelación en los residuos ($p<0.0001$ en Ljung-Box). El único que pasa la prueba en los rezagos 12 y 24 es el SARIMA$(0,1,1)(0,1,1)_{12}$, con coeficientes $\theta_1=-0.3098$ y $\Theta_1=-0.9319$ ($p<0.001$ en ambos). Este fue el orden base del SARIMAX. De los 15 ARIMA$(p,1,q)$ sin parte estacional que se estimaron, ninguno pasa Ljung-Box. La FAC de los residuos del mejor de ellos, el ARIMA$(2,1,3)$, tiene picos cercanos a 0.6 en los rezagos 12, 24 y 36, que desaparecen en el SARIMA (Fig.~\ref{fig:arima_residuos}).
+
+\begin{table}[H]
+\centering
+\caption{Mejor modelo de cada familia (entrenamiento)}
+\label{tab:identificacion}
+\scriptsize
+\begin{tabularx}{\columnwidth}{@{}Xrrcc@{}}
+\toprule
+\textbf{Modelo} & \textbf{AIC} & \textbf{BIC} & \textbf{p LB(12)} & \textbf{p LB(24)} \\
+\midrule
+AR$(1,1,0)(0,1,0)_{12}$ & 847.25 & 854.10 & $<0.0001$ & $<0.0001$ \\
+MA$(0,1,1)(0,1,0)_{12}$ & 843.39 & 850.24 & $<0.0001$ & $<0.0001$ \\
+ARMA$(2,1,3)(0,1,0)_{12}$ & 831.58 & 852.13 & $<0.0001$ & $<0.0001$ \\
+SARIMA$(0,1,1)(0,1,1)_{12}$ & 714.99 & 725.27 & 0.4032 & 0.4536 \\
+\midrule
+ARIMA$(2,1,3)$ con deriva$^{a}$ & 1080.09 & 1104.43 & $<0.0001$ & $<0.0001$ \\
+\bottomrule
+\multicolumn{5}{@{}p{\columnwidth}@{}}{\scriptsize $^{a}$ Sin diferencia estacional: su AIC y BIC no son comparables con los de arriba.}
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_06b_arima_fac_residuos.png}
+  \caption{FAC y FACP de los residuos del ARIMA$(2,1,3)$ (arriba) y del SARIMA$(0,1,1)(0,1,1)_{12}$ (abajo). Las líneas rojas marcan los rezagos 12, 24 y 36.}
+  \label{fig:arima_residuos}
+\end{figure}
+
+\subsection{Selección de las Variables Exógenas}
+
+La Tabla~\ref{tab:seleccion} resume los cuatro pasos de la selección. Con una sola exógena, la que más reduce el BIC del SARIMA son los días hábiles ($-20.92$), seguidos de la Semana Santa ($-4.15$), la manufactura de recursos primarios ($-0.69$) y el ICEN ($-0.28$). Las otras cuatro candidatas aumentan el BIC. Ningún par superó el umbral de correlación; la correlación más alta en valor absoluto fue $-0.60$, entre los días hábiles y la Semana Santa, y el VIF máximo fue 1.57. En la eliminación hacia atrás, el BIC del modelo conjunto bajó en cada paso, de 725.73 con las ocho candidatas a 704.40 con las dos finales. El cobre fue la última variable eliminada ($p=0.0560$).
+
+\begin{table}[H]
+\centering
+\caption{Selección automática de las variables exógenas (entrenamiento)}
+\label{tab:seleccion}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}Xcrrrcc@{}}
+\toprule
+\textbf{Candidata} & $\boldsymbol{L}$ & \textbf{$\Delta$BIC} & $\boldsymbol{\beta}$ & \textbf{p} & \textbf{VIF} & \textbf{Paso} \\
+\midrule
+Días hábiles & 0 & $-20.92$ & 0.2940 & $<0.0001$ & 1.57 & Queda \\
+ICEN & 10 & $-0.28$ & $-0.4531$ & 0.0028 & 1.02 & Queda \\
+Cobre & 7 & $+0.56$ & 0.0195 & 0.0528 & 1.03 & 6 \\
+Manuf. primaria & 6 & $-0.69$ & 0.0129 & 0.0253 & 1.09 & 5 \\
+Construcción & 8 & $+3.88$ & 0.0052 & 0.3734 & 1.16 & 4 \\
+Semana Santa & 0 & $-4.15$ & $-0.8073$ & 0.0056 & 1.56 & 3 \\
+Manuf. no primaria & 4 & $+3.26$ & $-0.0144$ & 0.1169 & 1.12 & 2 \\
+Minería metálica & 7 & $+3.68$ & 0.0146 & 0.2462 & 1.21 & 1 \\
+\bottomrule
+\multicolumn{7}{@{}p{\columnwidth}@{}}{\scriptsize $L$: rezago elegido por BIC. $\Delta$BIC, $\beta$ y p: SARIMAX con esa sola candidata, frente al SARIMA (BIC 725.27). Paso: paso de la eliminación hacia atrás en que salió la candidata.}
+\end{tabularx}
+\end{table}
+
+\subsection{Modelo SARIMAX Estimado}
+
+La Tabla~\ref{tab:coeficientes} compara el SARIMAX propuesto con el SARIMA y con las variantes de una sola exógena. Las dos exógenas son significativas al 1\%. Como $z_t=100\ln I_t$, los coeficientes se leen en porcentaje: un día hábil adicional eleva el índice en 0.29\%, y un grado de anomalía del ICEN lo reduce en 0.44\% diez meses después. Frente al SARIMA, la varianza del error baja 12.4\% (de 1.1985 a 1.0503), el AIC baja 27.7 puntos y el BIC, 20.9. La variante con solo los días hábiles tiene un BIC casi igual (704.35 frente a 704.40) y un AIC mayor (690.65 frente a 687.28).
+
+\begin{table}[H]
+\centering
+\caption{Coeficientes estimados (entrenamiento, error estándar entre paréntesis)}
+\label{tab:coeficientes}
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabularx}{\columnwidth}{@{}Xrrrr@{}}
+\toprule
+ & \textbf{SARIMA} & \textbf{SARIMAX} & \textbf{Solo días} & \textbf{Solo ICEN} \\
+\midrule
+Días hábiles & -- & 0.2933 & 0.2940 & -- \\
+ & & (0.0566) & (0.0573) & \\
+ICEN ($t-10$) & -- & $-0.4350$ & -- & $-0.4531$ \\
+ & & (0.1508) & & (0.1515) \\
+$\theta_1$ & $-0.3098$ & $-0.2841$ & $-0.2547$ & $-0.3367$ \\
+$\Theta_1$ & $-0.9319$ & $-0.9185$ & $-0.9151$ & $-0.9365$ \\
+$\sigma^2$ & 1.1985 & 1.0503 & 1.0775 & 1.1653 \\
+\midrule
+AIC & 714.99 & 687.28 & 690.65 & 711.29 \\
+BIC & 725.27 & 704.40 & 704.35 & 724.99 \\
+p Ljung-Box(12) & 0.4032 & 0.1051 & 0.2153 & 0.2215 \\
+p Ljung-Box(24) & 0.4536 & 0.2249 & 0.3625 & 0.3065 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Los residuos del SARIMAX no están autocorrelacionados: Ljung-Box da 15.81 en el rezago 12 ($p=0.1051$) y 26.65 en el 24 ($p=0.2249$), y su media ($-0.0898$) no difiere de cero ($p=0.2173$). En cambio, la prueba ARCH (36.34, $p=0.0003$) rechaza la varianza constante y la de Jarque-Bera (39.32, $p<0.001$) rechaza la normalidad. Los residuos más grandes en valor absoluto son los de marzo de 2017 ($-4.29$), febrero de 2016 ($+4.09$) y febrero de 2017 ($-3.49$) (Fig.~\ref{fig:residuos}).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_08_residuos_sarimax.png}
+  \caption{Residuos del SARIMAX$(0,1,1)(0,1,1)_{12}$ con días hábiles e ICEN en $t-10$ (entrenamiento, sin los 13 primeros): serie, histograma, FAC, FACP y gráfico Q--Q.}
+  \label{fig:residuos}
+\end{figure}
+
+\subsection{Pronóstico en la Prueba: Modelos Econométricos y Prophet}
+
+La Tabla~\ref{tab:horizontes} compara los dos esquemas de pronóstico. A un mes, el SARIMAX tiene el menor RMSE (2.70) y el SARIMA, el menor MAPE (1.056\% frente a 1.060\%). La diferencia entre ambos no es significativa (Diebold-Mariano, $p=0.4407$). El SARIMAX es significativamente mejor que el ingenuo estacional ($p<0.0001$) y que el ingenuo con último crecimiento ($p=0.0299$). La parte estacional reduce el RMSE a un mes en 36.2\%: el SARIMA (2.82) es significativamente mejor que el ARIMA$(2,1,3)$ (4.43; $p=0.0037$).
+
+\begin{table}[H]
+\centering
+\caption{Error en la prueba según el esquema de pronóstico}
+\label{tab:horizontes}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}Xrrrr@{}}
+\toprule
+ & \multicolumn{2}{c}{\textbf{Horizonte completo}} & \multicolumn{2}{c}{\textbf{A un mes}} \\
+\textbf{Modelo} & \textbf{RMSE} & \textbf{MAPE} & \textbf{RMSE} & \textbf{MAPE} \\
+\midrule
+SARIMAX (días hábiles + ICEN) & 7.0444 & 2.7274 & 2.6980 & 1.0596 \\
+SARIMAX (días hábiles) & 7.7778 & 3.0846 & 2.7180 & 1.0699 \\
+SARIMAX (ICEN) & 8.6816 & 3.4268 & 2.7977 & 1.0631 \\
+SARIMA$(0,1,1)(0,1,1)_{12}$ & 9.4602 & 3.7759 & 2.8238 & 1.0560 \\
+MA$(0,1,1)(0,1,0)_{12}$ & 9.0032 & 3.8470 & 3.8334 & 1.4183 \\
+ARMA$(2,1,3)(0,1,0)_{12}$ & 9.4230 & 4.0325 & 3.8882 & 1.4872 \\
+AR$(1,1,0)(0,1,0)_{12}$ & 8.1207 & 3.4645 & 3.9845 & 1.4628 \\
+ARIMA$(2,1,3)$ & 12.4570 & 5.0815 & 4.4253 & 1.7875 \\
+Prophet & 3.2975 & 1.2561 & 3.3829 & 1.3025 \\
+Prophet + días hábiles + ICEN & 3.1833 & 1.1310 & 3.4169 & 1.3186 \\
+Ingenuo con último crecimiento & 5.8645 & 2.2836 & 4.2276 & 1.5669 \\
+Ingenuo estacional & 20.1280 & 8.8228 & 7.3271 & 3.1435 \\
+\bottomrule
+\multicolumn{5}{@{}l}{\scriptsize RMSE en puntos del índice; MAPE en \%.}
+\end{tabularx}
+\end{table}
+
+En el horizonte completo, el orden cambia. Los dos Prophet tienen el menor error (RMSE de 3.18 y 3.30) y el SARIMAX (7.04) queda por debajo del SARIMA (9.46). Desde 2024, los pronósticos de horizonte completo del SARIMA y del SARIMAX quedan por encima del índice real en casi todos los meses (Fig.~\ref{fig:pronosticos}).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_07_pronosticos_sarimax.png}
+  \caption{Pronóstico del índice en la prueba (fondo gris): horizonte completo desde diciembre de 2021 con IC al 95\% del SARIMAX (arriba), pronóstico a un mes (centro) y variación interanual implícita en el pronóstico a un mes (abajo).}
+  \label{fig:pronosticos}
+\end{figure}
+
+En la validación interna 2017--2019, el RMSE de Prophet varió entre 3.656 y 3.788 en las 12 combinaciones de hiperparámetros. La combinación elegida fue \code{changepoint\_prior\_scale} = 0.01 y \code{seasonality\_prior\_scale} = 0.1. En la prueba a un mes, la versión con regresores (3.42) no reduce el error de la univariada (3.38). Ninguna de las dos difiere significativamente del SARIMAX ($p=0.0750$ y $p=0.0624$). Los regresores de Prophet tienen el mismo signo que en el SARIMAX y una magnitud parecida: 0.3636 para los días hábiles (0.2933 en el SARIMAX) y $-0.3513$ para el ICEN en $t-10$ ($-0.4350$). La Fig.~\ref{fig:prophet} muestra los pronósticos de Prophet.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_07_prophet_pronostico.png}
+  \caption{Pronósticos de Prophet en la prueba frente al SARIMAX: horizonte completo con IC al 95\% de Prophet con regresores (arriba) y pronóstico a un mes reestimando cada mes (abajo).}
+  \label{fig:prophet}
+\end{figure}
+
+\subsection{Boosting y AutoML}
+
+La validación con \code{TimeSeriesSplit} eligió árboles poco profundos en los tres modelos: XGBoost con 500 árboles, profundidad 2 y tasa 0.01; LightGBM con 200 árboles, profundidad 2 y tasa 0.05; y CatBoost con 200 árboles, profundidad 4 y tasa 0.05. En la prueba a un mes, sus RMSE fueron 3.12, 3.19 y 3.11, y el ensamble de los tres obtuvo 3.10. El mejor modelo de H2O AutoML fue un \textit{Stacked Ensemble} con todos los modelos entrenados, con RMSE de 3.05. Las diferencias entre AutoML y cada modelo de boosting no son significativas ($p\geq0.42$), y tampoco las de AutoML, CatBoost y XGBoost frente al SARIMAX ($p$ entre 0.156 y 0.159). LightGBM es significativamente peor que el SARIMAX ($p=0.0248$). En la importancia promedio de los tres modelos, los predictores principales son el rezago 12 del crecimiento mensual (0.297) y el rezago 1 (0.107); los días hábiles ocupan el décimo lugar (0.035).
+
+\subsection{Redes Recurrentes}
+
+La Tabla~\ref{tab:rnn} resume las redes recurrentes. Las bidireccionales tienen menor error que las unidireccionales, y la GRU bidireccional es la mejor. Agregar el ICEN y los días hábiles no redujo el error de la LSTM, la GRU ni la GRU bidireccional, y lo redujo levemente en la LSTM bidireccional (de 3.60 a 3.57). El resultado depende de la semilla: en la LSTM, el RMSE va de 4.40 a 8.52 según la semilla. Ninguna de las 12 combinaciones de red y semilla supera al SARIMAX. El promedio de las 3 semillas de la GRU bidireccional (RMSE 3.16) es la mejor red, sin diferencia significativa frente al SARIMAX ($p=0.0891$), el SARIMA ($p=0.1879$), CatBoost ($p=0.8804$) ni el ingenuo con último crecimiento ($p=0.1076$). La Fig.~\ref{fig:rnn} muestra sus pronósticos.
+
+\begin{table}[H]
+\centering
+\caption{RMSE de las redes recurrentes en la prueba a un mes}
+\label{tab:rnn}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}Xrrrr@{}}
+\toprule
+ & \multicolumn{2}{c}{\textbf{Semilla 0}} & \multicolumn{2}{c}{\textbf{3 semillas, sin exógenas}} \\
+\textbf{Red} & \textbf{Sin exóg.} & \textbf{Con exóg.} & \textbf{Media (DE)} & \textbf{Promedio} \\
+\midrule
+LSTM & 4.3957 & 5.8526 & 6.2869 (2.0849) & 5.5755 \\
+GRU & 4.6376 & 4.8346 & 4.9531 (0.2733) & 4.6075 \\
+LSTM bidireccional & 3.6020 & 3.5747 & 3.8707 (0.2352) & 3.6033 \\
+GRU bidireccional & 3.3386 & 3.3826 & 3.4661 (0.1130) & 3.1636 \\
+\bottomrule
+\multicolumn{5}{@{}p{\columnwidth}@{}}{\scriptsize Media (DE): media y desviación estándar del RMSE de las 3 semillas. Promedio: RMSE del pronóstico promedio de las 3 semillas.}
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_14_rnn_pronostico.png}
+  \caption{Pronóstico a un mes de las redes recurrentes en la prueba, sin exógenas (arriba) y con exógenas (abajo), frente al SARIMAX.}
+  \label{fig:rnn}
+\end{figure}
+
+\subsection{Transformer Entrenado desde Cero}
+
+En la validación 2017--2019, el mejor parche fue de 1 mes sin exógenas (RMSE 2.415) y de 6 meses con exógenas (2.449); ambos mejoran al ingenuo con último crecimiento (3.072). El Transformer principal es, por tanto, el de parches de 1 mes sin exógenas. La parada temprana eligió entre 157 y 175 épocas según la semilla (Fig.~\ref{fig:tr_curvas}). En la prueba a un mes, su RMSE fue 3.55 con la semilla 0 y 3.33 con el promedio de 3 semillas; con exógenas, 3.64 y 3.41. El promedio de semillas es significativamente peor que el SARIMAX ($p=0.0426$) y que el SARIMA ($p=0.0295$), y no difiere significativamente de la mejor red recurrente, de CatBoost ni del ingenuo con último crecimiento (Fig.~\ref{fig:tr_pronostico}).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_15_transformer_pronostico.png}
+  \caption{Pronóstico a un mes del Transformer entrenado desde cero en la prueba, con y sin exógenas, con la semilla 0 y con el promedio de 3 semillas, frente a la mejor red recurrente y al SARIMAX.}
+  \label{fig:tr_pronostico}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_15_transformer_curvas.png}
+  \caption{Curvas de aprendizaje del Transformer (semilla 0) sin exógenas (izquierda) y con exógenas (derecha). La línea roja marca la época elegida por parada temprana.}
+  \label{fig:tr_curvas}
+\end{figure}
+
+\subsection{Transformers Preentrenados}
+
+La Tabla~\ref{tab:preentrenados} y la Fig.~\ref{fig:preentrenados} resumen los seis candidatos. En la validación, PatchTST-FM-r2 tuvo el menor RMSE (2.093) y fue el elegido; todos los candidatos superaron a los dos ingenuos. En todos, 2017, año de El Niño Costero, fue el año con mayor error. En la prueba, el elegido obtuvo RMSE de 2.81 y no difiere significativamente del SARIMAX ($p=0.4686$), del SARIMA ($p=0.9501$) ni del Transformer entrenado desde cero ($p=0.1101$). Es significativamente mejor que los ingenuos con último crecimiento ($p=0.0452$) y estacional ($p<0.0001$). El candidato con menor error en la prueba fue TimesFM-3 con días hábiles e ICEN (2.69), que en la validación quedó en el tercer lugar. La correlación de Spearman entre el RMSE de validación y el de prueba de los seis candidatos fue 0.66 ($p=0.156$).
+
+\begin{table}[H]
+\centering
+\caption{Transformers preentrenados: RMSE en la validación 2017--2019 y en la prueba}
+\label{tab:preentrenados}
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabularx}{\columnwidth}{@{}Xrrrrrr@{}}
+\toprule
+\textbf{Modelo} & \textbf{Parám.} & \textbf{Valid.} & \textbf{2017} & \textbf{2018} & \textbf{2019} & \textbf{Prueba} \\
+\midrule
+PatchTST-FM-r2$^{a}$ & 385 & 2.093 & 2.809 & 1.476 & 1.754 & 2.809 \\
+Toto-2.0-1B & 1\,041 & 2.134 & 2.947 & 1.806 & 1.310 & 2.854 \\
+TimesFM-3 + exóg. & 331 & 2.274 & 3.355 & 1.740 & 1.106 & 2.689 \\
+TimesFM-3 & 331 & 2.318 & 3.426 & 1.838 & 1.006 & 2.841 \\
+Toto-2.0-313m & 313 & 2.489 & 3.352 & 2.093 & 1.724 & 2.892 \\
+Toto-2.0-22m & 22 & 2.542 & 3.279 & 2.198 & 1.949 & 2.877 \\
+\midrule
+Ingenuo últ. crecimiento & -- & 3.072 & 4.254 & 2.418 & 2.092 & 4.228 \\
+Ingenuo estacional & -- & 6.632 & 3.850 & 8.030 & 7.255 & 7.327 \\
+\bottomrule
+\multicolumn{7}{@{}p{\columnwidth}@{}}{\scriptsize $^{a}$ Elegido en la validación. Parám.: millones de parámetros. Exóg.: días hábiles e ICEN en $t-10$.}
+\end{tabularx}
+\end{table}
+
+\begin{figure*}[!t]
+  \centering
+  \includegraphics[width=\textwidth]{ts_15_preentrenados.png}
+  \caption{Transformers preentrenados: RMSE a un mes en la validación 2017--2019 (izquierda) y pronóstico a un mes del elegido en la prueba, frente al Transformer entrenado desde cero y al SARIMAX (derecha).}
+  \label{fig:preentrenados}
+\end{figure*}
+
+\subsection{Comparación Final}
+
+La Tabla~\ref{tab:final} y la Fig.~\ref{fig:comparacion} reúnen los 20 modelos del objetivo con el pronóstico a un mes. El SARIMAX tiene el menor RMSE (2.6980), la menor U de Theil (0.3174) y el menor IEC (0.7017). El SARIMA tiene el menor MAE (2.1511), MAPE (1.0560\%) y MASE (0.3455). Los 18 modelos que no son ingenuos tienen MASE y $U_2$ menores a 1; el denominador del MASE es 6.225 puntos del índice. Según Diebold-Mariano, ningún modelo es significativamente mejor que el SARIMAX. El SARIMAX es significativamente mejor que 11 modelos: LightGBM, el Transformer, la LSTM bidireccional, MA, ARMA, AR, la LSTM, ARIMA, la GRU y los dos ingenuos. Con los otros 8 la diferencia no es significativa.
+
+\begin{table*}[!t]
+\centering
+\caption{Comparación de los modelos del objetivo en la prueba a un mes (enero 2022 -- julio 2026), ordenados por RMSE}
+\label{tab:final}
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}rllrrrrrrr@{}}
+\toprule
+\textbf{\#} & \textbf{Modelo} & \textbf{Tipo} & \textbf{RMSE} & \textbf{MAE} & \textbf{MAPE (\%)} & \textbf{MASE} & \textbf{U de Theil} & \textbf{IEC} & \textbf{p DM} \\
+\midrule
+1 & SARIMAX + días hábiles + ICEN & Econometría & 2.6980 & 2.1616 & 1.0596 & 0.3472 & 0.3174 & 0.7017 & -- \\
+2 & PatchTST-FM-r2 (zero-shot) & Transformer preentrenado & 2.8094 & 2.2180 & 1.0906 & 0.3563 & 0.3322 & 0.7090 & 0.4686 \\
+3 & SARIMA$(0,1,1)(0,1,1)_{12}$ & Econometría & 2.8238 & 2.1511 & 1.0560 & 0.3455 & 0.3327 & 0.7058 & 0.4407 \\
+4 & AutoML (H2O, Stacked Ensemble) & AutoML & 3.0505 & 2.4612 & 1.2082 & 0.3954 & 0.3585 & 0.7286 & 0.1589 \\
+5 & CatBoost & Boosting & 3.1127 & 2.5706 & 1.2623 & 0.4129 & 0.3676 & 0.7353 & 0.1558 \\
+6 & XGBoost & Boosting & 3.1209 & 2.5012 & 1.2258 & 0.4018 & 0.3673 & 0.7323 & 0.1572 \\
+7 & LightGBM & Boosting & 3.1918 & 2.5704 & 1.2600 & 0.4129 & 0.3764 & 0.7374 & 0.0248 \\
+8 & GRU bidireccional & Deep Learning & 3.3386 & 2.5551 & 1.2682 & 0.4105 & 0.3938 & 0.7413 & 0.1269 \\
+9 & Prophet & Prophet & 3.3829 & 2.6341 & 1.3025 & 0.4231 & 0.4027 & 0.7455 & 0.0750 \\
+10 & Prophet + días hábiles + ICEN & Prophet & 3.4169 & 2.6692 & 1.3186 & 0.4288 & 0.4067 & 0.7477 & 0.0624 \\
+11 & Transformer (desde cero) & Transformer & 3.5490 & 2.7889 & 1.3766 & 0.4480 & 0.4158 & 0.7555 & 0.0144 \\
+12 & LSTM bidireccional & Deep Learning & 3.6020 & 2.7852 & 1.3805 & 0.4474 & 0.4241 & 0.7567 & 0.0431 \\
+13 & MA$(0,1,1)(0,1,0)_{12}$ & Econometría & 3.8334 & 2.9083 & 1.4183 & 0.4672 & 0.4523 & 0.7650 & 0.0142 \\
+14 & ARMA$(2,1,3)(0,1,0)_{12}$ & Econometría & 3.8882 & 3.0490 & 1.4872 & 0.4898 & 0.4585 & 0.7711 & 0.0002 \\
+15 & AR$(1,1,0)(0,1,0)_{12}$ & Econometría & 3.9845 & 3.0004 & 1.4628 & 0.4820 & 0.4706 & 0.7710 & 0.0154 \\
+16 & Ingenuo con último crecimiento & Referencia & 4.2276 & 3.2136 & 1.5669 & 0.5162 & 0.4993 & 0.7822 & 0.0299 \\
+17 & LSTM & Deep Learning & 4.3957 & 3.4168 & 1.6874 & 0.5489 & 0.5247 & 0.7917 & 0.0046 \\
+18 & ARIMA$(2,1,3)$ & Econometría & 4.4253 & 3.6079 & 1.7875 & 0.5796 & 0.5222 & 0.7978 & 0.0015 \\
+19 & GRU & Deep Learning & 4.6376 & 3.6037 & 1.7836 & 0.5789 & 0.5489 & 0.8004 & 0.0029 \\
+20 & Ingenuo estacional & Referencia & 7.3271 & 6.3970 & 3.1435 & 1.0276 & 0.8643 & 0.8713 & $<0.0001$ \\
+\bottomrule
+\end{tabular}}
+
+\vspace{2pt}
+{\scriptsize p DM: p-valor de Diebold-Mariano del SARIMAX frente a cada modelo. En todos los casos con $p<0.05$, el SARIMAX tiene el menor error cuadrático. Redes y Transformer: semilla 0, sin exógenas. SARIMAX y SARIMA de orden $(0,1,1)(0,1,1)_{12}$.\par}
+\end{table*}
+
+\begin{figure*}[!t]
+  \centering
+  \includegraphics[width=\textwidth]{ts_16_comparacion_final.png}
+  \caption{RMSE, MASE y U de Theil de los 20 modelos del objetivo en la prueba a un mes. La línea punteada marca 1 en el MASE y en la U de Theil.}
+  \label{fig:comparacion}
+\end{figure*}
+
+La tabla consolidada del notebook incluye 39 variantes: las variantes de una sola exógena del SARIMAX, los seis Transformers preentrenados, el ensamble de boosting, las redes con y sin exógenas y los promedios de semillas. En ella, el primer lugar es TimesFM-3 con días hábiles e ICEN (RMSE 2.6888), seguido del SARIMAX propuesto (2.6980), el SARIMAX solo con días hábiles (2.7180), el SARIMAX solo con el ICEN (2.7977) y PatchTST-FM-r2 (2.8094). Las Figs.~\ref{fig:mejor_tipo} y~\ref{fig:top5} muestran los pronósticos del mejor modelo de cada tipo y de estos cinco modelos.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_16_mejor_por_tipo.png}
+  \caption{Pronóstico a un mes en la prueba del mejor modelo de cada tipo.}
+  \label{fig:mejor_tipo}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_16_mejores_5_modelos.png}
+  \caption{Pronóstico de horizonte completo de los tres SARIMAX (arriba) y pronóstico a un mes de los cinco modelos con menor RMSE de la tabla consolidada (abajo).}
+  \label{fig:top5}
+\end{figure}
+
+\subsection{Pronóstico a 12 Meses}
+
+Reestimado con toda la muestra, el SARIMAX mantiene coeficientes cercanos a los del entrenamiento: 0.2946 para los días hábiles y $-0.3887$ para el ICEN en $t-10$ ($p=0.0047$), con $\theta_1=-0.3352$ y $\Theta_1=-0.8829$. El ICEN en $t-10$ de agosto de 2026 a mayo de 2027 es el observado, que pasa de $-0.42$ a 3.38 \textdegree C; para junio y julio de 2027 se usó el pronóstico de un ARIMA$(2,0,2)$ (3.57 y 3.48 \textdegree C). La Tabla~\ref{tab:futuro} y la Fig.~\ref{fig:futuro} muestran el pronóstico. La variación interanual pronosticada baja de 7.43\% en agosto de 2026 a 1.64\% en julio de 2027. Desde diciembre de 2026, el SARIMAX pronostica un crecimiento menor que el SARIMA sin exógenas. La diferencia es mayor en mayo, junio y julio de 2027 (1.45, 1.58 y 1.76 puntos porcentuales), los meses en que el ICEN en $t-10$ supera 3.3 \textdegree C. Desde abril de 2027, el límite inferior del IC al 95\% de la variación interanual es negativo.
+
+\begin{table}[H]
+\centering
+\caption{Pronóstico del SARIMAX, agosto 2026 -- julio 2027}
+\label{tab:futuro}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}Xrrrrr@{}}
+\toprule
+ & & \multicolumn{3}{c}{\textbf{Var. \% interanual}} & \textbf{SARIMA} \\
+\textbf{Mes} & \textbf{Índice} & \textbf{Puntual} & \textbf{IC 95\% inf.} & \textbf{IC 95\% sup.} & \textbf{Var. \%} \\
+\midrule
+Ago-2026 & 222.77 & 7.43 & 5.16 & 9.76 & 7.51 \\
+Set-2026 & 219.54 & 7.01 & 4.29 & 9.80 & 6.50 \\
+Oct-2026 & 227.03 & 5.90 & 2.83 & 9.06 & 5.73 \\
+Nov-2026 & 222.96 & 8.05 & 4.58 & 11.64 & 7.80 \\
+Dic-2026 & 230.97 & 6.95 & 3.20 & 10.83 & 7.11 \\
+Ene-2027 & 231.59 & 5.07 & 1.11 & 9.18 & 5.78 \\
+Feb-2027 & 217.01 & 5.86 & 1.62 & 10.29 & 6.33 \\
+Mar-2027 & 235.30 & 6.78 & 2.25 & 11.51 & 7.73 \\
+Abr-2027 & 227.25 & 4.57 & $-0.09$ & 9.46 & 4.97 \\
+May-2027 & 229.61 & 4.83 & $-0.06$ & 9.96 & 6.28 \\
+Jun-2027 & 221.64 & 3.05 & $-1.96$ & 8.32 & 4.63 \\
+Jul-2027 & 226.26 & 1.64 & $-3.49$ & 7.06 & 3.40 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_09_pronostico_12_meses.png}
+  \caption{Pronóstico a 12 meses del SARIMAX reestimado con toda la muestra, con IC al 80\% y al 95\%, frente al SARIMA sin exógenas: índice (arriba) y variación interanual (abajo).}
+  \label{fig:futuro}
+\end{figure}
+
+\subsection{Detección de Anomalías}
+
+Con el umbral del percentil 95 del \textit{score} promedio (0.643), Isolation Forest señaló 15 de los 294 meses (Fig.~\ref{fig:anomalias}). Diez son de la pandemia: de marzo a agosto de 2020, octubre de 2020 y de abril a junio de 2021. Los otros cinco son agosto de 2009, diciembre de 2015, febrero de 2016, marzo de 2017 y marzo de 2024. Diez de los 15 meses también son atípicos según la regla de Tukey. Como clasificador de los meses de pandemia, el \textit{score} tiene un AUC de 0.948. Con el nivel del índice y el mes como variables, ninguno de los 15 meses señalados es de la pandemia (AUC 0.396) y 13 de ellos caen en los extremos de la muestra (2002--2004 o 2024--2026). Con la serie imputada, el AUC baja a 0.479.
+
+La correlación de Spearman entre los \textit{scores} de distintas semillas fue 0.88, pero el índice de Jaccard del 5\% de meses más anómalos fue 0.24 entre semillas individuales y 0.43 entre dos promedios de 5 semillas. En total, 53 meses aparecen en el 5\% superior de al menos una semilla, y ningún mes aparece en las 10.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_13_anomalias.png}
+  \caption{Meses anómalos según Isolation Forest (5\% con mayor \textit{score}, en rojo) sobre el índice real sin imputar (arriba) y \textit{score} promedio de 10 semillas (abajo). La franja naranja marca los meses de pandemia imputados.}
+  \label{fig:anomalias}
+\end{figure}
+
+\section{Interpretación de los Modelos}
+
+\textbf{SARIMAX.} Con $\Theta_1=-0.9185$, el factor $(1-B^{12})$ de la diferencia estacional y el factor $(1+\Theta_1 B^{12})$ de la media móvil estacional casi se cancelan, lo que corresponde a un patrón estacional que cambia poco de un año a otro \cite{box2015}. El efecto de los días hábiles corresponde al número de días de producción del mes \cite{bell1983}. La Semana Santa salió del modelo después de incluir los días hábiles; el calendario de feriados de los días hábiles ya descuenta el jueves y el viernes santos, y ambas variables tienen una correlación de $-0.60$. El signo negativo del ICEN en $t-10$ coincide con la dirección de los efectos de El Niño Costero sobre la hidrología y la infraestructura de agua descritos en la literatura \cite{lavado2013,takahashi2015,inei2017}; el modelo no identifica cuál de esos canales opera.
+
+\textbf{Prophet.} La componente de tendencia de Prophet reduce su pendiente desde 2017, y el efecto conjunto de los regresores oscila entre $-1.8$ y $+1.2$ puntos de $100\ln I_t$ (Fig.~\ref{fig:prophet_comp}).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{ts_07_prophet_componentes.png}
+  \caption{Componentes de Prophet con regresores, en puntos de $100\ln I_t$: tendencia (arriba), estacionalidad anual (centro) y efecto conjunto de los días hábiles y el ICEN en $t-10$ (abajo).}
+  \label{fig:prophet_comp}
+\end{figure}
+
+\textbf{Boosting.} El rezago 12 del crecimiento mensual es el predictor más importante en XGBoost (0.365) y en CatBoost (0.399), lo que corresponde a la estacionalidad anual. En LightGBM la importancia está más repartida y el rezago 12 tiene 0.127.
+
+\textbf{Transformer.} En la matriz de atención del último bloque, la atención promedio de los parches que contienen $t-12$ o $t-24$ es 0.043, la del resto es 0.042 y la de una atención uniforme sería $1/24 = 0.042$ (Fig.~\ref{fig:atencion}). La red no concentra la atención en los rezagos estacionales.
+
+\begin{figure*}[!t]
+  \centering
+  \includegraphics[width=\textwidth]{ts_15_transformer_atencion.png}
+  \caption{Transformer sin exógenas con parches de 1 mes: matriz de atención promedio del último bloque (izquierda) y atención recibida por cada parche (derecha). En rojo, los parches $t-12$ y $t-24$; la línea punteada marca la atención uniforme.}
+  \label{fig:atencion}
+\end{figure*}
+
+\section{Discusión}
+
+El SARIMAX con días hábiles e ICEN obtuvo el menor RMSE a un mes. Su diferencia con 8 de los 9 modelos siguientes no es significativa; la excepción es LightGBM. El SARIMA sin exógenas tiene el menor MAE, MAPE y MASE, y su RMSE es 4.7\% mayor que el del SARIMAX. Que el SARIMAX tenga menor RMSE pero mayor MAE que el SARIMA indica que sus errores grandes son menores, ya que el RMSE pondera más esos errores que el MAE. En el entrenamiento, el BIC baja 20.9 puntos y la varianza del error, 12.4\%.
+
+De las ocho candidatas, las seleccionadas fueron una variable de calendario y una climática. Los índices sectoriales y el cobre no fueron significativos al 5\% una vez incluidos la dinámica del SARIMA y los días hábiles.
+
+Los modelos entrenados con esta serie que tienen más parámetros que el SARIMAX, como las redes recurrentes y el Transformer, no obtuvieron menor error que él. Con 240 meses de entrenamiento, la desviación estándar del RMSE de las redes recurrentes entre semillas fue de 0.11 a 2.08, las exógenas no redujeron su error y el Transformer entrenado desde cero distribuyó la atención de forma casi uniforme. Los Transformers preentrenados, que no se entrenaron con esta serie, tuvieron RMSE entre 2.69 y 2.89, por debajo de AutoML, del boosting y de las redes. La validación 2017--2019 no ordenó a los candidatos igual que la prueba (Spearman de 0.66, $p=0.156$): el candidato con menor error en la prueba quedó tercero en la validación.
+
+El esquema de pronóstico cambia el orden de los modelos. A un mes, el SARIMAX y el SARIMA están entre los mejores; en el horizonte completo, Prophet tiene menos de la mitad de su error. Con $d=1$ y $D=1$, el SARIMA y el SARIMAX proyectan la tendencia del entrenamiento, y desde 2024 sus pronósticos quedan por encima del índice real (Fig.~\ref{fig:pronosticos}). La tendencia por tramos de Prophet, con \code{changepoint\_prior\_scale} = 0.01, tiene una pendiente menor desde 2017 (Fig.~\ref{fig:prophet_comp}). La ventaja del SARIMAX frente al SARIMA en el horizonte completo (7.04 frente a 9.46) usa el ICEN observado más allá de 10 meses, que no estaría disponible en un pronóstico real.
+
+En el pronóstico a 12 meses, el ICEN en $t-10$ pasa de $-0.42$ \textdegree C en agosto de 2026 a 3.38 \textdegree C en mayo de 2027. Con el coeficiente reestimado ($-0.3887$), un ICEN de 3.38 \textdegree C equivale a una reducción de 1.3\% del índice, cercana a la diferencia de 1.45 a 1.76 puntos porcentuales con el SARIMA entre mayo y julio de 2027.
+
+En la detección de anomalías, Isolation Forest identificó la pandemia sin usar la imputación (AUC 0.948) cuando sus variables fueron la variación interanual y el crecimiento mensual desestacionalizado, y no con el nivel del índice (AUC 0.396). Entre los meses señalados fuera de la pandemia están febrero de 2016 y marzo de 2017, que son también dos de los tres meses con mayor residuo del SARIMAX. La lista de meses señalados cambia entre semillas (Jaccard de 0.24).
 
 \subsection{Limitaciones}
 
-El estudio presenta varias limitaciones que conviene declarar de forma explícita:
-
 \begin{enumerate}[leftmargin=1.3em,itemsep=1pt]
-  \item \textbf{Validez externa.} El modelo se entrenó y evaluó sobre el dataset Pima Indians. El contexto peruano motiva y justifica el problema, pero los resultados no están validados en población peruana; por lo tanto, no debe asumirse transferibilidad directa a establecimientos del país.
-  \item \textbf{Preprocesamiento y validación cruzada.} El preprocesamiento se encapsuló en un \code{Pipeline} durante \code{GridSearchCV}, por lo que cada fold recalcula imputación, winsorización, transformación logarítmica y escalado. Aun así, las métricas de CV siguen siendo estimaciones internas del train y no sustituyen la evaluación final en test.
-  \item \textbf{Selección del stacking.} El trío de modelos base del stacking se eligió por ROC AUC promedio en validación cruzada sobre train. Esta estrategia evita usar el test para seleccionar los estimadores, aunque el stacking conserva mayor complejidad operativa que el Bagging individual.
-  \item \textbf{Coincidencias train-test.} Se detectaron 6 registros idénticos entre train y test y se eliminaron del conjunto de prueba antes de la evaluación final. El test final quedó con 302 observaciones.
-  \item \textbf{Discretización por cuantiles.} La discretización de glucosa se realizó con cuantiles (terciles), útil para comparar riesgo relativo, y no con los umbrales clínicos oficiales; por ello, su lectura es exploratoria.
-  \item \textbf{Dependencia de la variable de entrada.} El score requiere \code{Glucose} como insumo, de modo que el modelo apoya la priorización de la confirmación y el seguimiento posteriores a una medición inicial, no la decisión de solicitar la primera prueba.
-  \item \textbf{Volumen de datos y costo computacional.} El conjunto de entrenamiento (2\,460 registros) es modesto y las diferencias entre los mejores modelos son estrechas. Un mayor volumen daría estimaciones de desempeño más estables y evaluaciones más confiables, pero a costa de mayores tiempos de entrenamiento y de búsqueda de hiperparámetros; escalar el enfoque exigiría acotar la rejilla o paralelizar el cómputo.
+  \item \textbf{Supuestos de los residuos.} Las pruebas ARCH ($p=0.0003$) y Jarque-Bera ($p<0.001$) rechazan la varianza constante y la normalidad. Los intervalos de confianza del SARIMAX suponen ambas, de modo que su cobertura real puede diferir del 80\% y el 95\% nominales.
+  \item \textbf{Un solo periodo de prueba.} La evaluación usa un solo periodo de 55 meses, de enero de 2022 a julio de 2026. En ese periodo, la prueba de Diebold-Mariano no encuentra diferencias significativas entre el SARIMAX y ocho de los modelos siguientes.
+  \item \textbf{Exógenas observadas.} En el horizonte completo, los SARIMAX usan el ICEN observado más allá de 10 meses, de modo que su error en ese esquema no incluye la incertidumbre de pronosticar el ICEN.
+  \item \textbf{Datos provisionales.} El BCRP revisa sus cifras y los últimos valores del ICEN son provisionales. El pronóstico a 12 meses usa el ICEN de julio de 2026 (3.38 \textdegree C), que puede cambiar.
+  \item \textbf{Imputación de la pandemia.} Los meses de marzo de 2020 a junio de 2021 del entrenamiento son imputados, y los modelos dependen de ese procedimiento.
+  \item \textbf{Reproducibilidad de AutoML.} Con la misma semilla, el RMSE de H2O AutoML fue 3.0078 en una ejecución anterior y 3.0505 en la final; los demás modelos dieron los mismos resultados en ambas.
+  \item \textbf{Redes neuronales.} Las redes recurrentes se entrenaron con 5 épocas y 3 semillas, y su error varía con la semilla (desviación estándar de 2.08 en la LSTM).
+  \item \textbf{Licencias.} Los pesos de TimesFM-3 tienen una licencia no comercial.
 \end{enumerate}
 
 \section{Conclusiones}
 
 \begin{itemize}[leftmargin=1.3em,itemsep=2pt]
-  \item \textbf{Mejor modelo.} El ganador global fue Bagging de árboles (ROC AUC 0.8937, F1 0.7222, accuracy 0.8344), por delante del Stacking Top-3 (0.8889) y de la Regresión Logística, mejor modelo base (0.8822). El buen desempeño de esta última muestra que una frontera lineal regularizada sigue siendo competitiva en datos clínicos tabulares.
-  \item \textbf{Variable determinante.} \code{Glucose} es el predictor dominante, con evidencia convergente de cuatro análisis independientes ---EDA, Mann-Whitney U, tasa de diabetes por tercil y SHAP---, y con una dirección coherente: a mayor glucosa, mayor riesgo estimado.
-  \item \textbf{Rigor del flujo.} El pipeline controla la fuga de información: se retiraron las coincidencias train--test y todo el preprocesamiento se recalcula dentro de cada fold de la validación cruzada.
-  \item \textbf{Uso aplicado.} El valor del modelo está en priorizar riesgo ---ordenar pacientes para acelerar confirmación (HbA1c, glucemia o PTOG) y seguimiento en atención primaria--- y no en diagnosticar de forma autónoma.
-  \item \textbf{Alcance.} Los resultados no están validados en población peruana y las diferencias entre los mejores modelos son estrechas; su consolidación requiere mayor volumen de datos y validación local.
+  \item \textbf{Variables exógenas.} De ocho candidatas, el procedimiento automático seleccionó los días hábiles del mes y el ICEN con 10 meses de rezago. Un día hábil adicional eleva el índice en 0.29\% y un grado de anomalía del ICEN lo reduce en 0.44\% diez meses después. El SARIMAX reduce el BIC del SARIMA en 20.9 puntos y sus residuos no están autocorrelacionados.
+  \item \textbf{Comparación.} En la prueba a un mes, el SARIMAX obtuvo el menor RMSE (2.70), la menor U de Theil (0.32) y el menor IEC (0.7017) entre los 20 modelos del objetivo. Ningún modelo fue significativamente mejor que el SARIMAX, que fue significativamente mejor que 11 de ellos. Las diferencias con PatchTST-FM-r2, el SARIMA, AutoML, CatBoost, XGBoost, la GRU bidireccional y los dos Prophet no fueron significativas.
+  \item \textbf{Familias de modelos.} Los Transformers preentrenados sin reentrenar quedaron entre los modelos con menor error, por delante de boosting, AutoML, redes recurrentes y el Transformer entrenado desde cero. Las exógenas no redujeron el error de las redes recurrentes.
+  \item \textbf{Horizonte.} En el pronóstico de horizonte completo, Prophet tuvo el menor error entre los modelos evaluados en ese esquema (RMSE de 3.18 a 3.30), y el SARIMA y el SARIMAX sobrestimaron el índice desde 2024.
+  \item \textbf{Pronóstico.} El SARIMAX pronostica que la variación interanual del sector bajará de 7.43\% en agosto de 2026 a 1.64\% en julio de 2027. Desde diciembre de 2026 queda por debajo del SARIMA, con la mayor diferencia (1.76 puntos porcentuales) en julio de 2027, cuando el ICEN en $t-10$ supera 3.4 \textdegree C.
+  \item \textbf{Anomalías.} Isolation Forest identificó los meses de la pandemia (AUC 0.948) y, fuera de ella, febrero de 2016 y marzo de 2017, entre otros.
 \end{itemize}
-
-\section{Trabajo Futuro}
-
-El trabajo futuro se organiza en tres frentes que van de lo más urgente a lo más aplicado. El primero es la \textbf{validez externa}, condición para cualquier uso real: validar el modelo con datos locales peruanos, evaluar su equidad (\emph{fairness}) por edad y región, y monitorear su estabilidad en el tiempo, ya que un modelo entrenado en otra población tiende a degradarse al cambiar de contexto. El segundo frente busca \textbf{enriquecer y afinar el modelo}: incorporar variables de laboratorio como HbA1c o glucosa en ayunas cuando estén disponibles, calibrar las probabilidades con métodos como Platt o \emph{isotonic regression} ---de modo que el score pueda leerse como una probabilidad real y no solo como un ordenamiento--- y fijar el umbral de decisión según el costo clínico de los falsos positivos y negativos. El tercer frente es la \textbf{puesta en uso}: convertir el artefacto exportado \code{mejor\_modelo\_diabetes.pkl} en una herramienta simple de inferencia que reciba los datos de un paciente y devuelva su score de priorización, cerrando el ciclo entre el análisis y la práctica clínica.
 
 \section*{Agradecimientos}
 
-Los autores agradecen a la Universidad ESAN y al curso de Minería de Datos por el marco académico para el desarrollo del proyecto. Asimismo, se reconoce el uso del dataset Pima Indians Diabetes y de fuentes públicas nacionales para contextualizar la problemática de diabetes en el Perú.
+Los autores agradecen a la Universidad ESAN por el marco académico del proyecto, y al Banco Central de Reserva del Perú y al Instituto Geofísico del Perú por publicar en acceso abierto las series utilizadas.
 
 \begin{thebibliography}{00}
 
-\bibitem{idf2021}
-International Diabetes Federation, \textit{IDF Diabetes Atlas}, 10th ed., Brussels: IDF, 2021.
+\bibitem{inei2017}
+Instituto Nacional de Estadística e Informática, ``Producción Nacional: marzo 2017,'' Informe Técnico N.\textdegree{} 05, INEI, Lima, 2017. \url{https://www.inei.gob.pe/media/MenuRecursivo/boletines/05-informe-tecnico-n05_produccion-nacional-mar2017.pdf}
 
-\bibitem{who2021}
-World Health Organization, ``Diabetes,'' WHO, 2021. \url{https://www.who.int/news-room/fact-sheets/detail/diabetes}
+\bibitem{bcrpdata}
+Banco Central de Reserva del Perú, ``BCRPData: series estadísticas mensuales PN01765AM, PN01723AM, PN01760AM, PN01763AM, PN01764AM, PN01766AM y PN01652XM,'' BCRP, 2026. \url{https://estadisticas.bcrp.gob.pe}
 
-\bibitem{kaggle}
-E. Aboelnaga, ``Diabetes Dataset,'' Kaggle, 2023. \url{https://www.kaggle.com/datasets/ehababoelnaga/diabetes-dataset}
+\bibitem{norgate2010}
+T. Norgate and N. Haque, ``Energy and greenhouse gas impacts of mining and mineral processing operations,'' \textit{Journal of Cleaner Production}, vol. 18, no. 3, pp. 266--274, 2010.
 
-\bibitem{kavakiotis2017}
-I. Kavakiotis et al., ``Machine Learning and Data Mining Methods in Diabetes Research,'' \textit{Computational and Structural Biotechnology Journal}, vol. 15, pp. 104--116, 2017.
+\bibitem{bcrp_moneda198}
+Banco Central de Reserva del Perú, ``El vínculo entre minería, energía e industria en el Perú,'' \textit{Revista Moneda}, no. 198. \url{https://www.bcrp.gob.pe/docs/Publicaciones/Revista-Moneda/moneda-198/moneda-198-13.pdf}
 
-\bibitem{sisodia2018}
-D. Sisodia and D. S. Sisodia, ``Prediction of Diabetes Using Classification Algorithms,'' \textit{Procedia Computer Science}, vol. 132, pp. 1578--1585, 2018.
+\bibitem{peralta2021}
+M. Peralta Neyra, ``La electricidad como factor de competitividad: evidencia empírica en el mercado de clientes libres en el contexto del gas de Camisea,'' \textit{Industrial Data}, vol. 24, no. 1, pp. 139--152, 2021. doi: 10.15381/idata.v24i1.16734
 
-\bibitem{chen2016}
-T. Chen and C. Guestrin, ``XGBoost: A Scalable Tree Boosting System,'' in \textit{Proc. 22nd ACM SIGKDD}, pp. 785--794, 2016.
+\bibitem{lavado2013}
+W. S. Lavado-Casimiro, O. Felipe, E. Silvestre, and L. Bourrel, ``ENSO impact on hydrology in Peru,'' \textit{Advances in Geosciences}, vol. 33, pp. 33--39, 2013. doi: 10.5194/adgeo-33-33-2013
 
-\bibitem{ke2017}
-G. Ke et al., ``LightGBM: A Highly Efficient Gradient Boosting Decision Tree,'' in \textit{NeurIPS}, vol. 30, 2017.
+\bibitem{takahashi2015}
+K. Takahashi, \textit{Boletín Técnico: Generación de modelos climáticos para el pronóstico de la ocurrencia del Fenómeno El Niño}, vol. 2, no. 3. Lima, Perú: Instituto Geofísico del Perú, 2015. \url{https://repositorio.igp.gob.pe/bitstreams/11a1226e-4f5a-4990-97fa-c4be061da3fc/download}
 
-\bibitem{lundberg2017}
-S. M. Lundberg and S.-I. Lee, ``A Unified Approach to Interpreting Model Predictions,'' in \textit{NeurIPS}, vol. 30, 2017.
+\bibitem{bell1983}
+W. R. Bell and S. C. Hillmer, ``Modeling time series with calendar variation,'' \textit{Journal of the American Statistical Association}, vol. 78, no. 383, pp. 526--534, 1983.
 
-\bibitem{minsa2024}
-Ministerio de Salud del Perú, ``La diabetes se constituye como séptima causa de muerte en nuestro país,'' MINSA, 2024.
+\bibitem{hong2016}
+T. Hong and S. Fan, ``Probabilistic electric load forecasting: A tutorial review,'' \textit{International Journal of Forecasting}, vol. 32, no. 3, pp. 914--938, 2016.
 
-\bibitem{inei2023}
-Instituto Nacional de Estadística e Informática, \textit{Perú: Enfermedades No Transmisibles y Transmisibles, 2023}, INEI, 2024.
+\bibitem{granger1974}
+C. W. J. Granger and P. Newbold, ``Spurious regressions in econometrics,'' \textit{Journal of Econometrics}, vol. 2, no. 2, pp. 111--120, 1974.
 
-\bibitem{ops2024}
-Organización Panamericana de la Salud, ``HEARTS en Perú: hacia una mejor atención de la diabetes en el primer nivel,'' OPS/OMS, 2024.
+\bibitem{yoo2010}
+S.-H. Yoo and S.-Y. Kwak, ``Electricity consumption and economic growth in seven South American countries,'' \textit{Energy Policy}, vol. 38, no. 1, pp. 181--188, 2010.
 
-\bibitem{cdc2024}
-Centro Nacional de Epidemiología, Prevención y Control de Enfermedades, ``Actualización en vigilancia de diabetes: casos registrados enero 2023--junio 2024,'' CDC Perú, 2024.
-
-\bibitem{cdc2025}
-Centro Nacional de Epidemiología, Prevención y Control de Enfermedades, ``Sala situacional de diabetes: red notificante nacional,'' CDC Perú, actualización 2025.
-
-\bibitem{pp0018}
-Ministerio de Salud del Perú, ``Programa Presupuestal 0018: enfermedades no transmisibles, reportes de diabetes,'' MINSA, 2023--2025.
-
-\bibitem{inei_adulto_mayor}
-Instituto Nacional de Estadística e Informática, ``Situación de la población adulta mayor,'' INEI, 2025.
-
-\bibitem{multilab_glucosa}
-Multilab, ``Ficha de examen: glucosa basal y postprandial,'' Laboratorio clínico, 2024--2026.
-
-\bibitem{multilab_hba1c}
-Multilab, ``Hemoglobina glicosilada HbA1c: información y tiempos de entrega,'' Laboratorio clínico, 2024--2026.
-
-\bibitem{loayza2025}
-Hospital Nacional Arzobispo Loayza, ``Solicitar exámenes de laboratorio: tiempos de entrega de exámenes generales,'' Gobierno del Perú, 2025.
+\bibitem{labandeira2017}
+X. Labandeira, J. M. Labeaga, and X. López-Otero, ``A meta-analysis on the price elasticity of energy demand,'' \textit{Energy Policy}, vol. 102, pp. 549--568, 2017.
 
 \bibitem{box2015}
 G. E. P. Box, G. M. Jenkins, G. C. Reinsel, and G. M. Ljung, \textit{Time Series Analysis: Forecasting and Control}, 5th ed. Hoboken, NJ, USA: Wiley, 2015.
@@ -590,47 +766,14 @@ G. E. P. Box, G. M. Jenkins, G. C. Reinsel, and G. M. Ljung, \textit{Time Series
 \bibitem{hyndman2021}
 R. J. Hyndman and G. Athanasopoulos, \textit{Forecasting: Principles and Practice}, 3rd ed. Melbourne, Australia: OTexts, 2021. \url{https://otexts.com/fpp3/}
 
-\bibitem{bcrpdata}
-Banco Central de Reserva del Perú, ``BCRPData: series estadísticas mensuales PN01765AM, PN01723AM y PN01652XM,'' BCRP, 2026. \url{https://estadisticas.bcrp.gob.pe}
-
-\bibitem{igp_icen}
-Instituto Geofísico del Perú, ``Índice Costero El Niño (ICEN),'' IGP/ENFEN, 2026. \url{http://met.igp.gob.pe/datos/ICEN.txt}
-
-\bibitem{takahashi2015}
-K. Takahashi, \textit{Boletín Técnico: Generación de modelos climáticos para el pronóstico de la ocurrencia del Fenómeno El Niño}, vol. 2, no. 3. Lima, Perú: Instituto Geofísico del Perú, 2015. \url{https://repositorio.igp.gob.pe/bitstreams/11a1226e-4f5a-4990-97fa-c4be061da3fc/download}
-
-\bibitem{inei2017}
-Instituto Nacional de Estadística e Informática, ``Producción Nacional: marzo 2017,'' Informe Técnico N.\textdegree{} 05, INEI, Lima, 2017. \url{https://www.inei.gob.pe/media/MenuRecursivo/boletines/05-informe-tecnico-n05_produccion-nacional-mar2017.pdf}
-
-\bibitem{bcrp_moneda198}
-Banco Central de Reserva del Perú, ``El vínculo entre minería, energía e industria en el Perú,'' \textit{Revista Moneda}, no. 198. \url{https://www.bcrp.gob.pe/docs/Publicaciones/Revista-Moneda/moneda-198/moneda-198-13.pdf}
-
-\bibitem{dickey1979}
-D. A. Dickey and W. A. Fuller, ``Distribution of the estimators for autoregressive time series with a unit root,'' \textit{Journal of the American Statistical Association}, vol. 74, no. 366, pp. 427--431, 1979.
-
-\bibitem{kpss1992}
-D. Kwiatkowski, P. C. B. Phillips, P. Schmidt, and Y. Shin, ``Testing the null hypothesis of stationarity against the alternative of a unit root,'' \textit{Journal of Econometrics}, vol. 54, no. 1--3, pp. 159--178, 1992.
-
-\bibitem{ljungbox1978}
-G. M. Ljung and G. E. P. Box, ``On a measure of lack of fit in time series models,'' \textit{Biometrika}, vol. 65, no. 2, pp. 297--303, 1978.
-
 \bibitem{taylor2018}
 S. J. Taylor and B. Letham, ``Forecasting at scale,'' \textit{The American Statistician}, vol. 72, no. 1, pp. 37--45, 2018.
 
-\bibitem{hyndman2006}
-R. J. Hyndman and A. B. Koehler, ``Another look at measures of forecast accuracy,'' \textit{International Journal of Forecasting}, vol. 22, no. 4, pp. 679--688, 2006.
+\bibitem{chen2016}
+T. Chen and C. Guestrin, ``XGBoost: A Scalable Tree Boosting System,'' in \textit{Proc. 22nd ACM SIGKDD}, pp. 785--794, 2016.
 
-\bibitem{theil1966}
-H. Theil, \textit{Applied Economic Forecasting}. Amsterdam, The Netherlands: North-Holland, 1966.
-
-\bibitem{diebold1995}
-F. X. Diebold and R. S. Mariano, ``Comparing predictive accuracy,'' \textit{Journal of Business \& Economic Statistics}, vol. 13, no. 3, pp. 253--263, 1995.
-
-\bibitem{engle1982}
-R. F. Engle, ``Autoregressive conditional heteroscedasticity with estimates of the variance of United Kingdom inflation,'' \textit{Econometrica}, vol. 50, no. 4, pp. 987--1007, 1982.
-
-\bibitem{jarque1980}
-C. M. Jarque and A. K. Bera, ``Efficient tests for normality, homoscedasticity and serial independence of regression residuals,'' \textit{Economics Letters}, vol. 6, no. 3, pp. 255--259, 1980.
+\bibitem{ke2017}
+G. Ke et al., ``LightGBM: A Highly Efficient Gradient Boosting Decision Tree,'' in \textit{NeurIPS}, vol. 30, 2017.
 
 \bibitem{prokhorenkova2018}
 L. Prokhorenkova, G. Gusev, A. Vorobev, A. V. Dorogush, and A. Gulin, ``CatBoost: Unbiased boosting with categorical features,'' in \textit{NeurIPS}, vol. 31, 2018.
@@ -653,9 +796,6 @@ A. Vaswani et al., ``Attention is all you need,'' in \textit{NeurIPS}, vol. 30, 
 \bibitem{nie2023}
 Y. Nie, N. H. Nguyen, P. Sinthong, and J. Kalagnanam, ``A time series is worth 64 words: Long-term forecasting with Transformers,'' in \textit{Proc. ICLR}, 2023.
 
-\bibitem{liu2008}
-F. T. Liu, K. M. Ting, and Z.-H. Zhou, ``Isolation forest,'' in \textit{Proc. 8th IEEE International Conference on Data Mining (ICDM)}, pp. 413--422, 2008.
-
 \bibitem{das2024}
 A. Das, W. Kong, R. Sen, and Y. Zhou, ``A decoder-only foundation model for time-series forecasting,'' in \textit{Proc. 41st International Conference on Machine Learning (ICML)}, PMLR, vol. 235, 2024.
 
@@ -667,6 +807,39 @@ IBM Research, ``Granite TimeSeries PatchTST-FM-r2,'' model card, Hugging Face, 2
 
 \bibitem{toto2026}
 E. Khwaja et al., ``Toto 2.0: Time series forecasting enters the scaling era,'' arXiv:2605.20119 [cs.LG], 2026. doi: 10.48550/arXiv.2605.20119
+
+\bibitem{hyndman2006}
+R. J. Hyndman and A. B. Koehler, ``Another look at measures of forecast accuracy,'' \textit{International Journal of Forecasting}, vol. 22, no. 4, pp. 679--688, 2006.
+
+\bibitem{diebold1995}
+F. X. Diebold and R. S. Mariano, ``Comparing predictive accuracy,'' \textit{Journal of Business \& Economic Statistics}, vol. 13, no. 3, pp. 253--263, 1995.
+
+\bibitem{igp_icen}
+Instituto Geofísico del Perú, ``Índice Costero El Niño (ICEN),'' IGP/ENFEN, 2026. \url{http://met.igp.gob.pe/datos/ICEN.txt}
+
+\bibitem{dickey1979}
+D. A. Dickey and W. A. Fuller, ``Distribution of the estimators for autoregressive time series with a unit root,'' \textit{Journal of the American Statistical Association}, vol. 74, no. 366, pp. 427--431, 1979.
+
+\bibitem{kpss1992}
+D. Kwiatkowski, P. C. B. Phillips, P. Schmidt, and Y. Shin, ``Testing the null hypothesis of stationarity against the alternative of a unit root,'' \textit{Journal of Econometrics}, vol. 54, no. 1--3, pp. 159--178, 1992.
+
+\bibitem{ljungbox1978}
+G. M. Ljung and G. E. P. Box, ``On a measure of lack of fit in time series models,'' \textit{Biometrika}, vol. 65, no. 2, pp. 297--303, 1978.
+
+\bibitem{obrien2007}
+R. M. O'Brien, ``A caution regarding rules of thumb for variance inflation factors,'' \textit{Quality \& Quantity}, vol. 41, pp. 673--690, 2007.
+
+\bibitem{theil1966}
+H. Theil, \textit{Applied Economic Forecasting}. Amsterdam, The Netherlands: North-Holland, 1966.
+
+\bibitem{engle1982}
+R. F. Engle, ``Autoregressive conditional heteroscedasticity with estimates of the variance of United Kingdom inflation,'' \textit{Econometrica}, vol. 50, no. 4, pp. 987--1007, 1982.
+
+\bibitem{jarque1980}
+C. M. Jarque and A. K. Bera, ``Efficient tests for normality, homoscedasticity and serial independence of regression residuals,'' \textit{Economics Letters}, vol. 6, no. 3, pp. 255--259, 1980.
+
+\bibitem{liu2008}
+F. T. Liu, K. M. Ting, and Z.-H. Zhou, ``Isolation forest,'' in \textit{Proc. 8th IEEE International Conference on Data Mining (ICDM)}, pp. 413--422, 2008.
 
 \end{thebibliography}
 
